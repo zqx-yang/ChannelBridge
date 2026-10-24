@@ -1,0 +1,56 @@
+cff-version: 1.2.0
+title: "ChannelBridge: channel-aware pose search for bispecific binder design"
+message: >-
+  If you use this software, please cite it, and also cite CAVER and the iMARS
+  DO metric, which it depends on but does not include.
+type: software
+authors:
+  - given-names: "Zoe"
+    family-names: "Yang"
+    orcid: "https://orcid.org/0009-0008-6579-1858"
+version: 0.1.0.dev0
+license: MIT
+repository-code: "https://github.com/zqx-yang/ChannelBridge"
+keywords:
+  - protein design
+  - substrate channeling
+  - enzyme cascade
+  - tunnel analysis
+  - bispecific binder
+references:
+  - type: article
+    title: >-
+      CAVER 3.0: A Tool for the Analysis of Transport Pathways in Dynamic
+      Protein Structures
+    authors:
+      - family-names: Chovancova
+        given-names: Eva
+      - family-names: Pavelka
+        given-names: Antonin
+      - family-names: Benes
+        given-names: Petr
+      - family-names: Strnad
+        given-names: Ondrej
+      - family-names: Brezovsky
+        given-names: Jan
+      - family-names: Kozlikova
+        given-names: Barbora
+      - family-names: Gora
+        given-names: Artur
+      - family-names: Sustr
+        given-names: Vilem
+      - family-names: Klvana
+        given-names: Martin
+      - family-names: Medek
+        given-names: Petr
+      - family-names: Biedermannova
+        given-names: Lada
+      - family-names: Sochor
+        given-names: Jiri
+      - family-names: Damborsky
+        given-names: Jiri
+    journal: "PLoS Computational Biology"
+    volume: 8
+    issue: 10
+    year: 2012
+    doi: 10.1371/journal.pcbi.1002708

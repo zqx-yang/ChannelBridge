@@ -1,0 +1,52 @@
+{
+  "name": "ChannelBridge",
+  "build": { "dockerfile": "Dockerfile" },
+
+  // Claude Code, installed via the official feature. The ":1.0" pins the
+  // feature's install script, not the CLI version -- the CLI installs latest
+  // and self-updates unless DISABLE_AUTOUPDATER says otherwise.
+  "features": {
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+  },
+
+  // Without this, ~/.claude is discarded on every rebuild and you sign in
+  // again each time. CLAUDE_CONFIG_DIR must point at the same path or
+  // ~/.claude.json stays in the home directory and is lost with it.
+  // ${devcontainerId} keeps this project's state separate from other repos'.
+  "mounts": [
+    "source=channelbridge-claude-config-${devcontainerId},target=/home/vscode/.claude,type=volume"
+  ],
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    // The figure stage shells out to PyMOL. In this image it is the
+    // distribution's open-source build; on a host with its own PyMOL, set
+    // this to that path instead.
+    "CHBRIDGE_PYMOL": "/usr/bin/pymol",
+    // CAVER is GPL software from Masaryk University and is NOT redistributed
+    // in this image. Download it from https://caver.cz (free academic
+    // registration) and either bind-mount it or unpack it under ./vendor,
+    // which this path expects. See .devcontainer/README.md.
+    "CAVER": "/workspaces/ChannelBridge/vendor/caver"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true
+      }
+    }
+  },
+
+  // Editable install with the dev extras, so pytest and ruff are the same
+  // versions everyone else is running.
+  "postCreateCommand": "pip install --no-cache-dir -e '.[dev,figures,yaml]' && pytest -q",
+
+  // Non-root. Claude Code refuses --dangerously-skip-permissions as root,
+  // and nothing here needs it.
+  "remoteUser": "vscode"
+}

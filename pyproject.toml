@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "channelbridge"
+version = "0.1.0.dev0"
+description = "Channel-aware pose search for bispecific binder design"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "Zoe Yang", email = "hy.yang@tum.de" }]
+keywords = [
+    "protein design",
+    "substrate channeling",
+    "enzyme cascade",
+    "tunnel analysis",
+    "bispecific binder",
+    "structural bioinformatics",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+# numpy only. PyMOL is needed for the prep and pose stages but is not
+# pip-installable in a form we can depend on, so it is checked at runtime
+# (see channelbridge.deps) rather than declared here. PyYAML is optional:
+# pair files may be written as JSON instead.
+dependencies = ["numpy>=1.20"]
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=5.4"]
+test = ["pytest>=7.0"]
+# The editable-SVG assembler only. The pose search does not need these, and a
+# headless cluster node should not have to install matplotlib to run one.
+figures = ["scipy>=1.7", "matplotlib>=3.4", "pillow>=8.0"]
+dev = ["pytest>=7.0", "PyYAML>=5.4", "ruff>=0.4", "scipy>=1.7", "matplotlib>=3.4", "pillow>=8.0"]
+
+[project.scripts]
+chbridge = "channelbridge.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/zqx-yang/ChannelBridge"
+Issues = "https://github.com/zqx-yang/ChannelBridge/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+channelbridge = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# "UP" (pyupgrade) is deliberately absent. The pose stage runs inside PyMOL,
+# which ships Python 3.9 on the target cluster, so the floor is 3.9 and this
+# code uses typing.Optional/List and %-formatting consistently rather than
+# mixing idioms to satisfy a rule aimed at newer interpreters.
+select = ["E", "F", "W", "I", "B", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests name what they assert; long, explicit test names are the point.
+"tests/*" = ["E501"]

@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.DS_Store
+
+# CAVER is GPL-3 and must be obtained from caver.cz; never vendor it here.
+caver_*/
+caver.jar
+lib/*.jar
+
+# Structure data and run outputs: large, and not ours to redistribute.
+*.pse
+*.ccp4
+out_*/
+output-complex*/
+examples/*/input/
+examples/*/output/
+
+# CAVER is GPL-3 and downloaded by the user; not ours to commit
+vendor/

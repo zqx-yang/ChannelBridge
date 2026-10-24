@@ -1,0 +1,173 @@
+# ChannelBridge pair file -- GDH (upstream) to FNR (downstream), channelling NADPH.
+#
+# The worked example. It is the P5/P6 system: glucose dehydrogenase
+# Q252L/E170K homotetramer (PDB 1RWB assembly 1, glucose from 3AY6, NADP built
+# from NAD) hands NADPH to spinach ferredoxin-NADP+ reductase (PDB 1FNC).
+#
+# Paths are relative to this file. Point them at your own prepared targets, or
+# run the prep stage to produce them.
+#
+#   chbridge validate examples/gdh_fnr/pair.yaml
+
+name: gdh_fnr
+channelled: NADPH
+
+# O_IC is measured at the UPSTREAM exit only, so this is not cosmetic.
+upstream: 1
+
+targets:
+  - id: 1
+    name: GDH
+    file: input/p6a_t1_GDH_BGC-NAP.pdb
+    chain: B                       # the protomer the pose is built on
+    chains: BCDEFGHIJKLM           # the id block target 1 may use
+    symmetry: D2                   # homotetramer; drives the occupancy check
+    ligands: [NAP, BGC]
+    channel_ligand: NAP            # NADP(H) is what travels the channel
+    extra_openings: ["resn BGC"]   # the glucose route: excluded, not scored
+    site: "resn NAP and name C4N"
+    vent: "resn NAP and name N1A+C2A+N3A+C4A+C5A+C6A+N6A+N7A+C8A+N9A"
+    avoid:
+      - "resi 145+158+162"
+      - "resi 170+252"
+    caver:
+      # NADP cannot sit in the route it takes, so it is excluded here.
+      exclude: [HOH, WAT, BGC, NAP]
+      start: [44.890, 12.027, -6.941]
+      probe_radius: 1.4
+      shell_depth: 6
+      clustering_threshold: 3.5
+      approximating_balls: 12
+      seed: 1
+      # Raise shell_radius until the exit stops moving. On the build used for
+      # the P5 record sr14 == sr16 to three decimals.
+      shell_radius: 14
+      shell_radius_sweep: [5, 7, 9, 10, 12, 14, 16]
+      cluster: 1                   # the cofactor route: 93-100% within 4 A of NAP
+
+  - id: 2
+    name: FNR
+    file: input/p6a_t2_FNR_FDA-A2P.pdb
+    chain: N
+    chains: NOPQRSTUVWXYZ
+    ligands: [FDA, A2P]
+    channel_ligand: A2P            # the NADP 2'-phosphate subsite
+    prosthetic: [FDA]              # FAD is part of the protein; never excluded
+    site: "resn FDA and name N5"
+    vent: "resn A2P"
+    avoid:
+      - "resi 314"                 # the Tyr314 gate
+    avoid_from:
+      - "input/1gaq.cif:A:B:5:8"   # the ferredoxin-binding face
+    caver:
+      exclude: [HOH, WAT, A2P]
+      start: [11.087, -1.644, 12.620]
+      probe_radius: 1.4
+      shell_depth: 6
+      clustering_threshold: 3.5
+      approximating_balls: 12
+      seed: 1
+      shell_radius: 7
+      shell_radius_sweep: [3.5, 5, 7]
+      cluster: 2                   # chosen empirically; see docs/caver-builds.md
+
+# How a CAVER sphere chain becomes geometry. These defaults are what makes the
+# numbers independent of which CAVER build produced them -- see
+# docs/caver-builds.md for the measurement that motivated them.
+tunnel:
+  normalise: true
+  spacing: 1.0        # resample the chain to this arc length
+  burial_min: 15      # exit = where the chain leaves the surface
+  burial_radius: 8.0
+  persist: 2.0        # a drop must hold this far to count as the exit
+  oic_arm: 1.0        # P1 is this far inward from the exit, along the path
+
+pose:
+  dic_min: 6
+  dic_max: 36
+  dic_step: 1
+  oic: [180, 165, 150, 135, 120, 105, 90]
+  azimuth: [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
+  spin: [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
+  tilt: [0, 30, 60, 90]
+  binder_gap: 6.0     # minimum protein-protein distance, NOT room for a binder
+  max_ok: 50
+
+# iMARS Figure 2C / ST2G. The ST2A constants differ by up to 0.032 DO over this
+# grid, so the choice is recorded rather than assumed.
+do_coefficients: imars-fig2c
+
+# Figure appearance. Every colour and transparency below is the project
+# default, shown here so it can be changed -- delete the whole section to keep
+# the defaults. Colours take a name (green, teal, magenta, ...), hex, or three
+# numbers (0-1 or 0-255); a bare colour keeps the role's own `lighten`, so
+# changing a hue does not silently change how washed out it is.
+render:
+  background: white              # or E6F2F9 / CFE6F3 / BADBEE, or any colour
+  stick_radius: 0.45
+  colors:
+    upstream:   {color: green,     lighten: 0.55}   # drawn on the LEFT
+    downstream: {color: orange,    lighten: 0.50}   # drawn on the right
+    binder:     {color: "#0065bd", lighten: 0.50}
+    ligand:     {color: magenta,   lighten: 0.0}    # unlightened on purpose:
+    tunnel:     {color: "#e60d0d", lighten: 0.0}    # must read through 2 surfaces
+    annotation: {color: "#e60d0d", lighten: 0.0}
+    copy:       {color: grey,      lighten: 0.45}
+  # 0 = opaque, 1 = invisible. `default` covers every role; name a role to
+  # override it. Making any role opaque means the 2D tunnel overlay has to be
+  # occlusion-clipped against it, which the renderer will tell you about.
+  transparency:
+    default: 0.65
+    tunnel: 0.75
+    # "inspect" is not a chain colour: it is how see-through the surfaces are
+    # in the scenes meant for LOOKING AT the structure (classes, occupancy,
+    # the hotspot map) rather than for illustrating it. Solid hides the
+    # cofactors the patches are positioned against, so it is translucent too,
+    # just less than the render scenes.
+    inspect: 0.55
+
+  # The editable SVG. Colours come from `colors` above (roles tunnel and
+  # annotation) so the vector overlay cannot drift away from the 3D scenes;
+  # what lives here is everything that has no meaning in 3D. All sizes are
+  # quoted at a 2000-px-wide render and scale with the real width.
+  svg:
+    fill_opacity: 0.30         # the flat channel fill. NOT 1 - transparency.tunnel:
+                               # the 3D tunnel is seen through two surfaces and
+                               # has to be faint, this sits on top of everything
+    stroke_width: 5.0
+    font_size: 46.0
+    arc_radius: 110.0          # the O_IC arc
+    arm_length: 150.0          # the drawn upstream-axis arm
+    exit_dot_radius: 8.0
+    label_clearance: 30.0      # how far a label must stay off the channel line
+    margin: 0.035              # of the content's larger side, around the crop
+    label_color: black
+    labels: [D_IC, O_IC, DO]   # [] draws the geometry with no numbers
+
+  # The overall hotspot map (chbridge's hotspots session): every candidate
+  # epitope of both enzymes at once. The two enzymes are deliberately NOT
+  # coloured differently here -- the subject is the residue classification,
+  # and two surface colours for one class would read as two classes.
+  hotspots:
+    classes:                   # only the classes you name change
+      ALLOWED: cyan            # solvent-exposed and usable
+      AVOID: grey60
+      SHADOW: pink             # inside the cylinder a binder must not block
+      CHANNEL: magenta         # the tunnel wall
+      LIGAND_CORE: purple
+      IFACE: grey30
+      BURIED: wheat
+    patch_base: red            # the patches are shades of ONE hue: a rank is
+    patch_light: 0.62          # an ordering, not a set of categories
+    patch_dark: 0.0
+    best_is_darkest: false     # false: patch_01 palest, last rank deepest
+    binder: palegreen          # the envelope drawn at every patch centroid
+    ligand: orange
+    label: black
+    channel_volume: magenta    # the tunnel, as its own object
+    mouth: deepteal
+    # The tunnel sits INSIDE a translucent surface, so it must be nearly
+    # opaque or it vanishes; the envelope sits outside, in front of things
+    # worth seeing, so it is faint. Both are the p5d map's values.
+    tunnel_transparency: 0.10
+    binder_transparency: 0.70
