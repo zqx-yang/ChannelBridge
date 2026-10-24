@@ -376,3 +376,27 @@ class TestSpreadInView:
             spread_in_view(a, [1, 0, 0], [0, 1, 0], min_sep=(1.0, 2.0, 3.0))
         with _pytest.raises(ValueError, match="positive"):
             spread_in_view(a, [1, 0, 0], [0, 1, 0], min_sep=(0.0, 5.0))
+
+    def test_bounds_keep_labels_inside_the_frame(self):
+        import numpy as np
+
+        from channelbridge.render.frame import spread_in_view
+
+        # four anchors in a row, pushed apart hard enough that an unbounded
+        # relaxation would throw the outer ones well past the frame
+        a = np.array([[0.0, 0, 0], [2.0, 0, 0], [4.0, 0, 0], [6.0, 0, 0]])
+        out = a + spread_in_view(a, [1, 0, 0], [0, 1, 0], min_sep=(30.0, 10.0),
+                                 bounds=(-40.0, 40.0, -20.0, 20.0))
+        uv = self.screen(out, [1, 0, 0], [0, 1, 0])
+        assert uv[:, 0].min() >= -40.01 and uv[:, 0].max() <= 40.01
+        assert uv[:, 1].min() >= -20.01 and uv[:, 1].max() <= 20.01
+
+    def test_without_bounds_they_are_free_to_leave(self):
+        import numpy as np
+
+        from channelbridge.render.frame import spread_in_view
+
+        a = np.array([[0.0, 0, 0], [2.0, 0, 0], [4.0, 0, 0], [6.0, 0, 0]])
+        out = a + spread_in_view(a, [1, 0, 0], [0, 1, 0], min_sep=(30.0, 10.0))
+        uv = self.screen(out, [1, 0, 0], [0, 1, 0])
+        assert uv[:, 0].max() - uv[:, 0].min() > 80.0, "unbounded spreads wide"

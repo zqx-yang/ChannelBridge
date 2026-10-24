@@ -56,7 +56,7 @@ from .cut import (
 )
 from .frame import Frame, angle_frame, pymol_view
 from .select import parse_variant
-from .style import RAY_SETTINGS, RenderStyle
+from .style import RAY_SETTINGS, RenderStyle, lighten
 
 __all__ = ["SCENE_NAMES", "SceneSpec", "build_session", "main"]
 
@@ -122,7 +122,8 @@ class SceneSpec:
         xsec_offset: float = 0.0,
         xsec_keep_min: float = 0.45,
         xsec_keep_max: float = 0.75,
-        ghost_transparency: float = 0.60,
+        ghost_transparency: float = 0.85,
+        xsec_transparency: float = 0.10,
         classes: bool = False,
         channel_ligand_up: Sequence[str] = (),
         channel_ligand_dn: Sequence[str] = (),
@@ -174,7 +175,10 @@ class SceneSpec:
         # sliver, too much as an uncut enzyme
         self.xsec_keep_min = float(xsec_keep_min)
         self.xsec_keep_max = float(xsec_keep_max)
+        # p5d's values: the kept half nearly solid, the removed half a faint
+        # shell so the enzyme still reads as whole rather than sliced apart
         self.ghost_transparency = float(ghost_transparency)
+        self.xsec_transparency = float(xsec_transparency)
         # The species that actually travels the channel, per enzyme. Only this
         # one is wrapped into the drawn volume: wrapping every cofactor would
         # paint red over prosthetic groups that the channel never reaches.
@@ -525,6 +529,7 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
         "footprint": [n for n in helpers if n.startswith("footprint")],
     }
     # render / cross_section, per requested variant
+    multi_view = None
     variants = {"monomer": ("cplx", ""), "multimer": ("cplx_multi", "_multi")}
     for base_name, want in (("render", spec.render), ("render_cs", spec.cross_section)):
         if want == "none":
@@ -538,6 +543,15 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
                     % (base_name, v, src))
                 continue
             key = base_name if want != "both" else "%s_%s" % (base_name, v)
+            if v == "multimer" and src in cmd.get_names("objects"):
+                # The assembly is far bigger than the focus pair, so the pair's
+                # zoom clips it: the first multimer SVG came out with protomers
+                # cut off at the frame edge. Re-fit to the assembly, keeping
+                # the rotation, and store that view with the multimer scenes.
+                cmd.set_view(view)
+                cmd.zoom(src, buffer=6, complete=1)
+                cmd.clip("slab", 3000)
+                multi_view = cmd.get_view()
             if base_name == "render":
                 sets[key] = [src + "_il", *tunnels, *ann]
                 # The same frame WITHOUT the 3D channel and annotation. This
@@ -560,7 +574,7 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
         cmd.disable("all")
         for o in objs:
             cmd.enable(o)
-        cmd.set_view(view)
+        cmd.set_view(multi_view if ("multimer" in name and multi_view) else view)
         cmd.scene(name, "store", _scene_note(name))
         report["scenes"].append("%s (%s)" % (name, ", ".join(objs)))
 
@@ -724,15 +738,31 @@ def _occupancy(cmd, spec, st, report):
         cmd.load(spec.occupancy_pdb, "cplx_multi")
         cmd.hide("everything", "cplx_multi")
         cmd.show("surface", "cplx_multi and polymer")
-        cmd.set_color("c_copy", [float(c) for c in st.palette.rgb("copy")])
-        cmd.color("c_copy", "cplx_multi and polymer")
+        # Every protomer gets ITS OWN ENZYME'S colour, in a different shade,
+        # rather than a uniform grey for "the copies". Grey copies read as a
+        # different species and, worse, a grey copy sitting in front of the
+        # coloured protomer hides the one the figure is about. Shades of the
+        # same hue keep the pair legible and still tell the copies apart.
         for role, which in (("upstream", "up"), ("downstream", "dn")):
-            try:
-                sel = "cplx_multi and %s and polymer" % spec.chain_sel(which)
-            except ValueError:
+            chains = spec.occ_up_chains if which == "up" else spec.occ_dn_chains
+            chains = [c for c in chains if c]
+            if not chains:
                 continue
-            cmd.set_color("c_" + role, [float(c) for c in st.palette.rgb(role)])
-            cmd.color("c_" + role, sel)
+            base = st.palette.rgb(role)
+            # the first chain is the one the pose was built on: full colour,
+            # the rest progressively paler
+            for i, ch in enumerate(chains):
+                sel = "cplx_multi and chain %s and polymer" % ch
+                if cmd.count_atoms(sel) == 0:
+                    continue
+                shade = lighten(base, 0.0 if i == 0 else
+                                min(0.72, 0.18 + 0.18 * i))
+                key = "c_%s_%s" % (role, ch.lower())
+                cmd.set_color(key, [float(c) for c in shade])
+                cmd.color(key, sel)
+            report["objects"].append(
+                "cplx_multi %sstream protomers %s in shades of %s"
+                % (which, "+".join(chains), role))
         if spec.ligand_resn:
             # the assembly carries its cofactors too; without this the
             # multimer render loses every ligand the monomer render shows
@@ -838,7 +868,7 @@ def _cross_section(cmd, spec, st, frame, geom, report, source="cplx", suffix="")
         solid = "xsec_%s%s" % (which, suffix)
         ghost = "ghost_%s%s" % (which, suffix)
         cmd.create(solid, sel)
-        cmd.create(ghost, sel)
+        cmd.create(ghost, sel)   # trimmed to the COMPLEMENT below
         m = cmd.get_model(solid)
         xyz = np.array(m.get_coord_list())
         # Each enzyme is cut at ITS OWN channel, not at the midpoint between
@@ -854,7 +884,19 @@ def _cross_section(cmd, spec, st, frame, geom, report, source="cplx", suffix="")
             cmd.select("_cut", "%s and index %s" % (solid, "+".join(str(i) for i in idx)))
             cmd.remove("_cut")
             cmd.delete("_cut")
-        for nm, tr in ((solid, 0.0), (ghost, spec.ghost_transparency)):
+            # The ghost is the atoms the cut REMOVED -- the complement, not the
+            # whole enzyme. A ghost holding every atom redraws the kept half on
+            # top of the solid cut face and hides exactly what the section
+            # exists to show; p5d splits the enzyme into two complementary
+            # objects (481 + 1490 = 1971 atoms on its upstream enzyme) and that
+            # is why its cross-section reads as one.
+            keep_idx = [a.index for a, k in zip(m.atom, drop) if not k]
+            if keep_idx:
+                cmd.select("_keep", "%s and index %s"
+                           % (ghost, "+".join(str(i) for i in keep_idx)))
+                cmd.remove("_keep")
+                cmd.delete("_keep")
+        for nm, tr in ((solid, spec.xsec_transparency), (ghost, spec.ghost_transparency)):
             cmd.hide("everything", nm)
             cmd.show("surface", nm)
             cmd.set_color("c_" + role, [float(c) for c in st.palette.rgb(role)])
@@ -863,9 +905,11 @@ def _cross_section(cmd, spec, st, frame, geom, report, source="cplx", suffix="")
         made += [solid, ghost]
         kept = len(xyz) - len(idx)
         report["objects"].append(
-            "%s (%d of %d atoms kept, %.0f%%, solid) + %s (all atoms, %.0f%% transparent)"
+            "%s (%d of %d atoms kept, %.0f%%, transparency %.2f) + %s "
+            "(the %d removed atoms, %.0f%% transparent)"
             % (solid, kept, len(xyz), 100.0 * kept / max(1, len(xyz)),
-               ghost, spec.ghost_transparency * 100))
+               spec.xsec_transparency, ghost, len(xyz) - kept,
+               spec.ghost_transparency * 100))
         if kept < 0.25 * len(xyz):
             report.setdefault("warnings", []).append(
                 "%s keeps only %.0f%% of the enzyme; the section will read as a "
@@ -1058,7 +1102,8 @@ def main(argv=None):
         xsec_offset=float(args.get("xsec_offset", 0.0)),
         xsec_keep_min=float(args.get("xsec_keep_min", 0.45)),
         xsec_keep_max=float(args.get("xsec_keep_max", 0.75)),
-        ghost_transparency=float(args.get("ghost_transparency", 0.60)),
+        ghost_transparency=float(args.get("ghost_transparency", 0.85)),
+        xsec_transparency=float(args.get("xsec_transparency", 0.10)),
         classes=str(args.get("classes", "")).lower() in ("1", "true", "yes"),
         channel_ligand_up=_csv(args.get("channel_ligand_up")),
         channel_ligand_dn=_csv(args.get("channel_ligand_dn")),
@@ -1177,9 +1222,20 @@ def selftest():
         check(any(o.startswith("ghost_") for o in on), "render_cs keeps a ghost")
         solid = next(o for o in on if o.startswith("xsec_"))
         ghost = next(o for o in on if o.startswith("ghost_"))
+        # The cut copy and the ghost are COMPLEMENTARY halves of one enzyme:
+        # together they must account for every atom of it, and neither may be
+        # empty. The old assertion (solid < ghost) encoded the earlier design
+        # where the ghost held EVERY atom -- which is exactly what made it
+        # redraw the kept half over the cut face and hide the section.
+        which = "up" if solid.endswith("up") else "dn"
         n_solid, n_ghost = cmd.count_atoms(solid), cmd.count_atoms(ghost)
-        check(0 < n_solid < n_ghost,
-              "the cut copy has fewer atoms than the ghost (%d vs %d)" % (n_solid, n_ghost))
+        n_whole = cmd.count_atoms("cplx and %s and polymer" % spec.chain_sel(which))
+        check(n_solid > 0 and n_ghost > 0,
+              "both halves of the section are non-empty (%d kept, %d removed)"
+              % (n_solid, n_ghost))
+        check(n_solid + n_ghost == n_whole,
+              "cut and ghost partition the enzyme (%d + %d = %d, enzyme has %d)"
+              % (n_solid, n_ghost, n_solid + n_ghost, n_whole))
 
         # the inspection scenes must be LESS transparent than the render ones,
         # but not solid: a solid surface hides the cofactors

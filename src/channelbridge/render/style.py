@@ -35,6 +35,7 @@ __all__ = [
     "DEFAULT_STYLE",
     "DESIGNED_BINDER_HEX",
     "FLAT_SETTINGS",
+    "INSPECT_SETTINGS",
     "NAMED_COLORS",
     "RAY_SETTINGS",
     "ColorSpec",
@@ -489,6 +490,35 @@ RAY_SETTINGS: Dict[str, object] = {
     "reflect": 0.3,
     "specular": 0.0,
     "spec_reflect": 0.0,
+    "antialias": 2,
+    "transparency_mode": 3,
+}
+
+#: The look for sessions meant for INSPECTION rather than illustration: the
+#: hotspot map, and any scene whose job is to show where things are.
+#:
+#: This is deliberately NOT :data:`RAY_SETTINGS`. The outline mode draws a
+#: black edge along every crease of every surface; over one or two colours
+#: that reads as a clean illustration, but the hotspot map stacks seven
+#: residue classes under a translucent surface and the outlines turn it into
+#: a dark mess -- the single most-reported defect of that session.
+#:
+#: These are PyMOL's own defaults plus the two settings the p5d map script
+#: actually sets. Verified by reading the settings back out of a p5d session:
+#: ray_trace_mode 0, ambient 0.14, direct 0.45, reflect 0.45, specular 1.0,
+#: ray_shadows on, depth_cue on. Shadows and depth cue are what give the
+#: surfaces their shape once the outlines are gone.
+INSPECT_SETTINGS: Dict[str, object] = {
+    "ray_trace_mode": 0,
+    "ray_interior_color": "grey50",
+    "two_sided_lighting": 1,
+    "ambient": 0.14,
+    "direct": 0.45,
+    "reflect": 0.45,
+    "specular": 1.0,
+    "ray_shadows": 1,
+    "depth_cue": 1,
+    "surface_quality": 1,
     "antialias": 2,
     "transparency_mode": 3,
 }

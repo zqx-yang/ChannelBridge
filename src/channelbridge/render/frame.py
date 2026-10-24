@@ -220,7 +220,7 @@ def select_poses(poses, n_pse=None, n_svg=None):
 
 
 def spread_in_view(anchors, x_axis, y_axis, *, min_sep=16.0,
-                   iterations: int = 60, step: float = 0.5):
+                   iterations: int = 60, step: float = 0.5, bounds=None):
     """Push label anchors apart **in the camera plane** until they stop overlapping.
 
     Labels are placed in 3D but read in 2D, so two anchors that are far apart
@@ -240,6 +240,12 @@ def spread_in_view(anchors, x_axis, y_axis, *, min_sep=16.0,
     tall, so two anchors at the same height need much more horizontal room
     than two stacked vertically. A circular criterion either leaves wide
     labels overlapping or flings short ones needlessly far apart.
+
+    ``bounds`` is an optional ``(u_lo, u_hi, v_lo, v_hi)`` box in the same
+    screen axes. Anchors are kept inside it, so a label pushed apart from its
+    neighbours cannot be pushed off the edge of the frame instead -- which is
+    what happened to the right-hand labels of the p6a hotspot map, where
+    separation worked but one name still ran off the picture.
 
     Returns an ``(N, 3)`` array of displacements to add to ``anchors``.
     """
@@ -288,6 +294,10 @@ def spread_in_view(anchors, x_axis, y_axis, *, min_sep=16.0,
                 moved[i] -= push
                 moved[j] += push
                 worst = max(worst, min_sep - dist)
+        if bounds is not None:
+            lo = np.array([bounds[0], bounds[2]], float) / sep
+            hi = np.array([bounds[1], bounds[3]], float) / sep
+            moved = np.clip(moved, lo, hi)
         if worst < 1e-3:
             break
     delta = (moved - uv) * sep

@@ -118,3 +118,47 @@ ligand checks and renumbers globally.
 
 **Context is quadratic.** Trimming context chains to residues within 20 A of
 the target costs about 0.25x.
+
+## A CAVER tunnel is too dense to hand straight to CaverDock
+
+Our cluster's CAVER build emits sphere chains at **~0.17 Å spacing** (185
+spheres over 31.7 Å on a typical cluster). CaverDock's own example tunnel is
+13 spheres at **0.956 Å** — about six times coarser.
+
+Feed the raw chain to CaverDock's `discretizer` and it produces **2 disks from
+95 spheres**. The job then **completes normally and prints plausible energies**
+(−8.2 / −7.5 kcal/mol in the case we hit), because the job wrapper only checks
+that the `.dsd` file is non-empty. Nothing in the exit code, the log, or the
+presence of output files reveals that the trajectory is meaningless.
+
+This is the same root cause as the finding this whole tool exists to encode —
+**sphere density is a property of the CAVER build, not of the protein** — and it
+propagates into every downstream tool that consumes a tunnel.
+
+**Re-space to ~1 Å before the discretizer, and assert the disk count** against
+the tunnel's length. A 2-disk `.dsd` from a 16 Å tunnel is a hard error, not a
+result.
+
+### The preparation is not the same as for D_IC
+
+Counter-intuitive, and easy to get backwards:
+
+| | truncate at the surface? | re-space? |
+|---|---|---|
+| **D_IC / O_IC** | **yes** — the exit *is* the measurement | yes, to a fixed arc length |
+| **CaverDock** | **no** — the ligand has to reach bulk solvent to leave | yes, to ~1 Å |
+
+The same chain needs two incompatible preparations, and feeding either tool the
+other's version produces output that looks entirely normal. Keep the raw chain
+alongside whatever you derive from it.
+
+### Crystal ligands often do not match their PDB chemical component
+
+Meeko needs bond orders, hydrogens and formal charges; a ligand copied out of a
+crystal structure has none of them. Matching the component's ideal SDF onto the
+coordinates with RDKit's `AssignBondOrdersFromTemplate` supplies them — but only
+if the atom counts agree. In 3A5R the HC4 ligand has **11 of the component's 12
+heavy atoms** (one carboxyl oxygen unmodelled), the match fails, and chemistry
+falls back to geometry-based bond inference. Docking energies depend on the atom
+typing that follows, so record which route each ligand took and discount the
+fallbacks rather than treating all the numbers alike.

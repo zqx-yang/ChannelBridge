@@ -515,7 +515,8 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
         patch_outward_normal,
     )
     from .frame import Frame, pymol_view, spread_in_view
-    from .scenes import RAY_SETTINGS, _apply, _ca_by_resi, _pseudo_spheres
+    from .scenes import _apply, _ca_by_resi, _pseudo_spheres
+    from .style import INSPECT_SETTINGS
 
     cmd = _cmd()
     cmd.reinitialize()
@@ -601,7 +602,10 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
         cmd.set("transparency", spec.transparency, "%s and polymer" % obj)
         cmd.set("transparency", spec.transparency, obj)
     cmd.bg_color("white")
-    _apply(cmd, RAY_SETTINGS)
+    # INSPECT_SETTINGS, not RAY_SETTINGS: see the note on both in style.py.
+    # The outline mode is what made every previous version of this session
+    # come out dark.
+    _apply(cmd, INSPECT_SETTINGS)
     info["objects"].append("%s + %s (surfaces at transparency %.2f, ligands as sticks)"
                            % (up_obj, dn_obj, spec.transparency))
 
