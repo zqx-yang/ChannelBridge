@@ -162,3 +162,40 @@ heavy atoms** (one carboxyl oxygen unmodelled), the match fails, and chemistry
 falls back to geometry-based bond inference. Docking energies depend on the atom
 typing that follows, so record which route each ligand took and discount the
 fallbacks rather than treating all the numbers alike.
+
+## Output-file age is not a liveness signal for a wrapped job
+
+The house stall rule is "log idle 30 min **and** no new output → investigate".
+Applied to CaverDock it is wrong in both directions, and following it would
+have meant cancelling six healthy multi-hour jobs.
+
+* **CaverDock writes nothing during the smoothed upper-bound phase**, which is
+  ~86 % of a run (one measured run: LB 11 min, UB 1 h 37 min). Output can sit
+  untouched for a long time while the job is perfectly healthy.
+* **The job wrapper rsyncs results every 30 s**, so the output directory's
+  mtime tracks the *syncer*, not the tool. It can look seconds-fresh while the
+  tool is producing nothing at all.
+
+So the directory's timestamp is decoupled from progress in both directions.
+**Judge liveness from the mirrored log only**, which shows the search
+advancing (`cScheduler::step(): conformations computed: …`).
+
+This generalises to any tool run behind a wrapper that syncs on a timer: the
+sync makes "recent output" meaningless, and a long internal phase makes
+"no recent output" meaningless.
+
+## Cost is driven by the search, not by the size of the input
+
+Measured over six CaverDock runs: 5:41, 9:33, 10:57, 19:37, 47:50 and
+**1:48:14**. The 1 h 48 outlier was the **shortest** tunnel in the set
+(16.3 Å, 57 disks, a 20-heavy-atom ligand). Neither tunnel length, disk count
+nor ligand size predicts runtime; the upper-bound search does.
+
+Quoting a single "~20 min per run" from the median hides a 19× spread. Report
+the distribution, and size a batch from the tail rather than the middle.
+
+`--final_state LB` stops after the lower bound and is ~8× cheaper, but the
+lower bound optimises each disk independently, so **its maximum is not a
+barrier the ligand must continuously cross** — which is the quantity one would
+be ranking tunnels by. Reasonable as a cheap pre-filter over many tunnels;
+not a substitute for the upper bound in a result.
