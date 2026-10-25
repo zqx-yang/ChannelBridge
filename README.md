@@ -45,6 +45,18 @@ needed only for the prep, pose and figure stages, and is run as a subprocess
 rather than imported. The SVG assembler additionally needs scipy, matplotlib
 and pillow: `pip install -e '.[figures]'`.
 
+A conda environment that covers PyMOL and a JRE as well:
+
+```bash
+conda env create -f environment.yml
+conda activate channelbridge
+pip install -e '.[dev,figures,yaml]'
+```
+
+Or open the repository in a dev container (VS Code, or GitHub Codespaces with
+nothing installed locally) — see
+[.devcontainer/README.md](.devcontainer/README.md).
+
 **CAVER is not included.** It is GPL-3 software from Masaryk University;
 download it from [caver.cz](https://caver.cz/) (free academic registration)
 and point `$CAVER` at the folder holding `caver.jar` and `lib/`. ChannelBridge
@@ -76,12 +88,28 @@ chbridge do --dic 16 --oic 150 --all-sets
 
 # Figures for chosen poses: sessions for the top ten, an editable SVG for the
 # best one, and one pose's structure copied out. Ray-traces run one at a time.
-chbridge figures out-complex_GDH_FNR --pse top10 --svg rank1 --pdb geom007
+chbridge figures out-complex_GDH_FNR --pse top10 --svg rank1 --pdb geom007 \
+    --prefix p6a
 
-# One session showing every candidate epitope of both enzymes, in a real
-# pose's relative position.
-chbridge hotspots out-complex_GDH_FNR --up-chains B,C,D,E --dn-chains N \
-    --up-name GDH --dn-name FNR --ligands NAP,BGC,FDA,A2P
+# Or in two steps, so the camera is yours: build the session, open it, turn it
+# to the frame you want, save it -- then render THAT (or any session of your
+# own). Everything written carries the --prefix you choose.
+chbridge session out-complex_GDH_FNR --pse rank1 --prefix p6a
+chbridge render p6a_geom001_render.pse --prefix p6a --variant both \
+    --dic 17.0 --oic 165.0 --do 0.850
+
+# Classify one enzyme's residues and rank its epitopes. Writes the two
+# tables every later stage reads; hand-edit them or supply your own.
+chbridge patches GDH.pdb --chain B --name GDH --ligands NAP,BGC \
+    --tunnel GDH_cl1_norm.pdb --avoid "resi 145+158"
+
+# One session showing every candidate epitope of both enzymes. Built BEFORE
+# the sampling, so it computes its own reference placement rather than taking
+# a pose. Writes p6a_hotspot-map.pse.
+chbridge hotspots --prefix p6a --up-chains B,C,D,E --dn-chains N \
+    --up-name GDH --dn-name FNR --ligands NAP,BGC,FDA,A2P \
+    --up-pdb GDH.pdb --dn-pdb FNR.pdb \
+    --tunnel-up GDH_cl1_norm.pdb --tunnel-dn FNR_cl2_norm.pdb
 ```
 
 The seven stages, which five are optional and what each reads and writes are
@@ -128,24 +156,75 @@ Every DO is computed on a rigid docked pose. It says where the geometry
 *could* be, not that a binder achieving it exists; that is what a structure
 prediction filter tests.
 
-## Layout
+## Layout, and what is built
+
+Seven pipeline stages, five of them optional
+([docs/pipeline.md](docs/pipeline.md)). **Built** means implemented and
+tested here; **to build** means the stage currently lives only in the
+author's project scripts and has a package home waiting for it.
+
+```
+ 1 prep ──► 2 CAVER ──► 3 patches ──► 4 hotspot map   (look, decide)
+                             │
+                             ▼
+                         5 DO sampling ──► 6 session + SVG
+                             │
+                             └──────────► 7 generator input
+```
+
+| # | stage | state | where it lives |
+|---|---|---|---|
+| 1 | structure selection and prep | **to build** | `prep/` |
+| 2 | CAVER: run it | **to build** | `caver/` |
+| 2 | CAVER: normalise its output | **built** | `tunnel.py` |
+| 3 | hotspot patch selection | **built** | `patches.py` |
+| 4 | hotspot map session | **built** | `render/hotspots.py` |
+| 5 | DO sampling: the metric | **built** | `geometry.py` |
+| 5 | DO sampling: the pose search | **to build** | `pose/` |
+| 6 | session, render, SVG | **built** | `render/`, `figures.py` |
+| 7 | generator input (RFdiffusion3 etc.) | **to build** | `rfd3/` |
+
+Stage 4 runs **before** stage 5 and therefore cannot borrow a pose; it
+computes its own reference placement (`reference_pose.py`). Stage 6 is split
+in two — `chbridge session` builds the `.pse`, `chbridge render` draws from
+any `.pse`, including one you rotated and saved yourself.
 
 ```
 src/channelbridge/
-  geometry.py      D_IC, O_IC, the DO score and its coefficient sets
-  tunnel.py        CAVER sphere chains: orient, truncate, resample, O_IC arm
-  config.py        the pair file
-  cli.py           the chbridge command line
-  figures.py       finds poses in an output folder and plans their figures
+  geometry.py        D_IC, O_IC, the DO score and its coefficient sets
+  tunnel.py          CAVER sphere chains: orient, truncate, resample, O_IC arm
   reference_pose.py  places the two enzymes at O_IC 180 without a pose search
-  render/          the figure layer: scenes.py (sessions), svg.py (the editable
-                   SVG), hotspots.py (the overall epitope map), style.py
-  io/pdb.py        fixed-column PDB reading; CAVER's radius-in-B-factor
-  caver/ prep/ pose/ rfd3/      stages, being ported
-tests/             including a cross-build regression against real CAVER output
-docs/              caver-builds.md, figures.md, imars-verification.md,
-                   pipeline.md, pitfalls.md
-examples/gdh_fnr/  the worked example
+  patches.py         residue classes and hotspot patches; the scoring is pure
+  config.py          the pair file, and the render: style block inside it
+  figures.py         finds poses in an output folder and plans their figures
+  cli.py             the chbridge command line
+  io/pdb.py          fixed-column PDB reading; CAVER's radius-in-B-factor
+  render/
+    scenes.py        the pose session: objects, scenes, the angle frame
+    hotspots.py      the epitope map: one object per class, patch and envelope
+    svg.py           the editable SVG: traced channel, angle marker, labels
+    frame.py         cameras, label separation in the camera plane and in depth
+    cut.py           cutting geometry (the cross-section scene was dropped)
+    style.py         every colour, transparency and size, all overridable
+    annotation.py    the D_IC line, O_IC arm, arc and labels, shared by
+                     the pose session and the hotspot map
+    run_pse.py  run_png.py  run_hotspots.py  run_patches.py
+                     entry points run INSIDE PyMOL
+  caver/  prep/  pose/  rfd3/                  stage homes, not yet filled
+tests/               including a cross-build regression against real CAVER output
+docs/                caver-builds.md, figures.md, imars-verification.md,
+                     pipeline.md, pitfalls.md
+examples/gdh_fnr/    the worked example
+.devcontainer/       a dev container; environment.yml for conda
+```
+
+The `render/run_*.py` files are the only ones that import PyMOL. Everything
+else is ordinary Python and is tested with pytest; those three are checked by
+their own selftests, because they must run inside PyMOL's interpreter:
+
+```bash
+pymol -cq src/channelbridge/render/run_pse.py -- --selftest
+pymol -cq src/channelbridge/render/run_hotspots.py -- --selftest
 ```
 
 ## Citing

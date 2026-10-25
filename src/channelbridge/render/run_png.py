@@ -23,8 +23,14 @@ FLAT = ("mask", "mouth", "footprint")
 # surface is nothing but creases and the outline mode draws a black edge
 # along every one of them, burying the thing the section exists to show.
 # p5d renders its own cross_section at ray_trace_mode 0 for the same reason.
-NO_OUTLINE = ("render_cs", "base_cs", "classes", "occupancy",
-              "map", "patches", "envelopes")
+NO_OUTLINE = ("classes", "occupancy", "map", "envelopes")
+
+#: Scenes whose labels must be drawn in front of the surfaces. A label sits at
+#: its own anchor's depth, so one naming a patch on the far side of an enzyme
+#: renders behind the near surface and washes out. The session sets this too,
+#: but a setting is global, not per scene, and a render is free to have been
+#: given a session built before the setting existed.
+FLOAT_LABELS = ("map", "classes", "envelopes")
 cmd.load(a["pse"])
 scene = a.get("scene")
 if scene:
@@ -37,7 +43,15 @@ if scene:
                        ("ray_shadows", 0), ("ray_trace_fog", 0), ("depth_cue", 0),
                        ("antialias", 2)):
             cmd.set(k_, v_)
-    elif scene in NO_OUTLINE:
+    if scene in FLOAT_LABELS:
+        # float_labels helps only in the viewport -- a ray trace honours
+        # depth regardless -- so the session ALSO lifts the anchors. The
+        # orthographic camera is what makes that lift free on screen, and it
+        # is a setting, so it is re-applied here: a scene stores object
+        # visibility, never globals.
+        cmd.set("float_labels", 1)
+        cmd.set("orthoscopic", 1)
+    if scene in NO_OUTLINE:
         for k_, v_ in (("ray_trace_mode", 0), ("ray_interior_color", "grey50"),
                        ("two_sided_lighting", 1), ("ambient", 0.14),
                        ("direct", 0.45), ("reflect", 0.45), ("specular", 1.0),

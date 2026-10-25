@@ -131,63 +131,63 @@ class TestVariants:
         assert parse_variant("") == "none"
 
     def test_aliases(self):
-        assert parse_variant("mono") == "monomer"
-        assert parse_variant("multi") == "multimer"
-        assert parse_variant("complex") == "monomer"
-        assert parse_variant("occupancy") == "multimer"
+        assert parse_variant("mono") == "pair"
+        assert parse_variant("multi") == "assembly"
+        assert parse_variant("complex") == "pair"
+        assert parse_variant("occupancy") == "assembly"
         assert parse_variant("all") == "both"
 
     def test_case_insensitive(self):
-        assert parse_variant("Monomer") == "monomer"
+        assert parse_variant("Monomer") == "pair"
 
     def test_an_unknown_value_lists_the_options(self):
-        with pytest.raises(ValueError, match="monomer"):
+        with pytest.raises(ValueError, match="pair"):
             parse_variant("solid")
 
 
 class TestDependencyAndPlan:
     def test_an_svg_pulls_in_its_session(self):
-        plan = resolve(POSES, svg="geom004", render="monomer")
+        plan = resolve(POSES, svg="geom004", render="pair")
         assert plan.pse == ["geom004"]
         assert plan.pse_added_for_svg == ["geom004"]
         assert "added because an SVG needs one" in plan.summary()
 
     def test_an_existing_session_is_not_rebuilt_for_an_svg(self):
-        plan = resolve(POSES, svg="geom004", render="monomer",
+        plan = resolve(POSES, svg="geom004", render="pair",
                        existing_pse=["geom004"])
         assert plan.pse == []
         assert plan.pse_reused == ["geom004"]
         assert "already on disk, not rebuilt" in plan.summary()
 
     def test_rebuild_forces_it_anyway(self):
-        plan = resolve(POSES, svg="geom004", render="monomer",
+        plan = resolve(POSES, svg="geom004", render="pair",
                        existing_pse=["geom004"], rebuild=True)
         assert plan.pse == ["geom004"]
 
     def test_a_session_already_requested_is_not_double_counted(self):
-        plan = resolve(POSES, pse="geom004", svg="geom004", render="monomer")
+        plan = resolve(POSES, pse="geom004", svg="geom004", render="pair")
         assert plan.pse == ["geom004"]
         assert plan.pse_added_for_svg == []
 
     def test_the_three_outputs_are_independent(self):
         plan = resolve(POSES, pse="top3", svg="rank1", pdb="all",
-                       render="monomer")
+                       render="pair")
         assert plan.pse == ["geom001", "geom002", "geom003"]
         assert plan.svg == ["geom001"]
         assert len(plan.pdb) == 5
 
     def test_pse_list_stays_in_rank_order_after_dependency_merge(self):
-        plan = resolve(POSES, pse="geom005", svg="geom001", render="monomer")
+        plan = resolve(POSES, pse="geom005", svg="geom001", render="pair")
         assert plan.pse == ["geom001", "geom005"]
 
     def test_an_svg_with_no_drawable_scene_is_flagged(self):
-        # the SVG is traced from render / cross_section; with both off there
-        # is nothing to trace
-        plan = resolve(POSES, svg="rank1", render="none", cross_section="none")
+        # the SVG is traced from the render scene; with it off there is
+        # nothing to trace
+        plan = resolve(POSES, svg="rank1", render="none")
         assert any("set at least one" in n for n in plan.notes)
 
     def test_no_flag_when_a_scene_is_on(self):
-        plan = resolve(POSES, svg="rank1", cross_section="monomer")
+        plan = resolve(POSES, svg="rank1", render="pair")
         assert not any("set at least one" in n for n in plan.notes)
 
     def test_overwriting_an_existing_session_is_announced(self):
@@ -204,9 +204,9 @@ class TestDependencyAndPlan:
         assert "geom003 (rank 3)" in plan.summary()
 
     def test_summary_shows_the_scene_variants(self):
-        plan = resolve(POSES, pse="rank1", render="both", cross_section="monomer")
+        plan = resolve(POSES, pse="rank1", render="both")
         s = plan.summary()
-        assert "render=both" in s and "cross_section=monomer" in s
+        assert "render=both" in s
         assert "classes, occupancy" in s, "the always-present scenes should be named"
 
     def test_rank_of_resolves(self):

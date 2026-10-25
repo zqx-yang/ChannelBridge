@@ -190,3 +190,34 @@ class TestUniqueLabels:
 
     def test_single_path_is_its_basename(self, tmp_path):
         assert _unique_labels([str(tmp_path / "only")]) == ["only"]
+
+
+class TestSessionAndRenderAreSeparateSteps:
+    """``session`` builds the .pse, ``render`` draws from one.
+
+    Kept apart on the user's instruction (2026-10-25) so that "open it,
+    rotate it to the frame you want, save it, render THAT" is a first-class
+    path -- and so ``render`` accepts a session the user built themselves.
+    """
+
+    def test_session_names_its_output_from_the_prefix(self, tmp_path, capsys):
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "geom001_complex.pdb").write_text("END\n", encoding="utf-8")
+        assert main(["session", str(out), "--prefix", "p6a", "--dry-run"]) == 0
+        printed = capsys.readouterr().out
+        assert "p6a_geom001_render.pse" in printed
+
+    def test_render_refuses_a_session_that_is_not_there(self, tmp_path, capsys):
+        rc = main(["render", str(tmp_path / "nope.pse"), "--dry-run"])
+        assert rc != 0
+        assert "no such session" in capsys.readouterr().err
+
+    def test_render_takes_any_session_and_names_both_variants(self, tmp_path, capsys):
+        pse = tmp_path / "hand_rotated.pse"
+        pse.write_bytes(b"not really a session")
+        assert main(["render", str(pse), "--prefix", "p6a",
+                     "--pose", "geom007", "--dry-run"]) == 0
+        printed = capsys.readouterr().out
+        assert "p6a_geom007_render_pair.svg" in printed
+        assert "p6a_geom007_render_assembly.svg" in printed

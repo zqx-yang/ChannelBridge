@@ -35,7 +35,9 @@ examples:
       --structure caver/in/GDH/gdh.pdb --exclude HOH,WAT,BGC,NAP
   chbridge tunnel a/out_X b/out_X --structure s.pdb --exclude HOH,WAT --compare
   chbridge do --dic 16 --oic 150
-  chbridge figures out-complex_GDH_FNR --svg top3 --render both --cross-section monomer
+  chbridge figures out-complex_GDH_FNR --svg top3 --render both --prefix p6a
+  chbridge session out-complex_GDH_FNR --pse rank1 --prefix p6a
+  chbridge render figures/p6a_geom001_render.pse --prefix p6a --variant both
 """
 
 
@@ -308,7 +310,7 @@ def cmd_figures(args) -> int:
         plan = resolve(
             collect_poses(geoms),
             pse=args.pse, svg=args.svg, pdb=args.pdb,
-            render=args.render, cross_section=args.cross_section,
+            render=args.render,
             existing_pse=existing, rebuild=args.rebuild,
         )
     except ValueError as exc:
@@ -321,13 +323,163 @@ def cmd_figures(args) -> int:
     out_dir = args.out_dir or os.path.join(args.output_dir, "figures")
     runner = Runner(pymol=args.pymol, dry_run=args.dry_run)
     made = build(plan, geoms, out_dir, runner=runner, width=args.width, height=args.height,
-                 pse_args=_split_csv(args.pse_arg), style=style, svg_style=svg_style)
+                 pse_args=_split_csv(args.pse_arg), style=style, svg_style=svg_style,
+                 prefix=args.prefix)
     for kind in ("pse", "svg", "pdb"):
         for path in made[kind]:
             print("  %-4s %s" % (kind, path))
     for bad in made["failed"]:
         print("  FAILED %s" % bad, file=sys.stderr)
     return 1 if made["failed"] else 0
+
+
+def cmd_session(args) -> int:
+    """Build the .pse only. Rendering is a separate step on purpose.
+
+    Separating them means you can open the session, rotate it to a frame you
+    like, save it, and render THAT -- or hand `chbridge render` a session you
+    built yourself. A command that renders as soon as it builds forecloses both.
+    """
+    from .figures import Runner, collect_poses, scan_output, session_name
+    from .render.select import resolve
+
+    try:
+        geoms = scan_output(args.output_dir)
+    except FileNotFoundError as exc:
+        return _fail(str(exc))
+    if not geoms:
+        return _fail("no geom*_complex.pdb in %s" % args.output_dir)
+    try:
+        plan = resolve(collect_poses(geoms), pse=args.pse or "top1",
+                       render=args.render, rebuild=True)
+    except ValueError as exc:
+        return _fail(str(exc))
+    out_dir = args.out_dir or os.path.join(args.output_dir, "figures")
+    runner = Runner(pymol=args.pymol, dry_run=args.dry_run)
+    by_id = {g.pose_id: g for g in geoms}
+    made = []
+    for pid in plan.pse:
+        g = by_id.get(pid)
+        if g is None:
+            print("  skip %s: not in the output folder" % pid, file=sys.stderr)
+            continue
+        dst = os.path.join(out_dir, session_name(args.prefix, pid))
+        print("  [%s] -> %s" % (pid, dst))
+        rc = runner.run(runner.script("run_pse.py"),
+                        ["complex=%s" % g.complex_pdb, "out=%s" % dst,
+                         "render=%s" % args.render, *_split_csv(args.pse_arg)])
+        if rc:
+            print("  FAILED %s: run_pse exited %d" % (pid, rc), file=sys.stderr)
+        else:
+            made.append(dst)
+    for m in made:
+        print("  pse  %s" % m)
+    print("\nnow render it, or rotate it first and save, then:"
+          "\n  chbridge render <session.pse> --prefix %s" % args.prefix)
+    return 0 if made or args.dry_run else 1
+
+
+def cmd_render(args) -> int:
+    """Render scenes and assemble SVGs from an EXISTING .pse."""
+    from .figures import Runner, helper_name, svg_name
+    from .render.style import RenderStyle
+    from .render.svg import SvgStyle, build_svg
+
+    pse = args.session
+    if not os.path.isfile(pse):
+        return _fail("no such session: %s" % pse)
+    out_dir = args.out_dir or os.path.dirname(os.path.abspath(pse))
+    inter = os.path.join(out_dir, "intermediate")
+    if not args.dry_run:
+        os.makedirs(inter, exist_ok=True)
+    runner = Runner(pymol=args.pymol, dry_run=args.dry_run)
+    pose = args.pose or "geom001"
+    style = RenderStyle()
+    svg_style = SvgStyle.from_dict(getattr(style, "svg", None))
+
+    variants = ["pair", "assembly"] if args.variant == "both" else [args.variant]
+    made = []
+    for v in variants:
+        sfx = "_assembly" if v == "assembly" else ""
+        helpers = {}
+        ok = True
+        for h in ("mask", "mouth", "footprint"):
+            path = os.path.join(inter, helper_name(args.prefix, pose, h + sfx))
+            helpers[h] = path
+            if os.path.exists(path) and not args.dry_run:
+                continue
+            if runner.run(runner.script("run_png.py"),
+                          ["pse=%s" % pse, "scene=%s" % (h + sfx), "out=%s" % path,
+                           "w=%d" % args.width, "h=%d" % args.height]):
+                ok = False
+        base = os.path.join(inter, helper_name(args.prefix, pose,
+                                               "base_%s_transparent" % v))
+        if not (os.path.exists(base) and not args.dry_run):
+            if runner.run(runner.script("run_png.py"),
+                          ["pse=%s" % pse, "scene=base_%s" % v, "out=%s" % base,
+                           "w=%d" % args.width, "h=%d" % args.height,
+                           "transparent=1"]):
+                ok = False
+        if not ok:
+            print("  FAILED %s: a render step failed" % v, file=sys.stderr)
+            continue
+        dst = os.path.join(out_dir, svg_name(args.prefix, pose, v))
+        if args.dry_run:
+            print("  would assemble %s" % dst)
+            made.append(dst)
+            continue
+        try:
+            axis_px = None
+            if args.axis_px:
+                try:
+                    axis_px = [float(x) for x in args.axis_px.split(",")]
+                except ValueError:
+                    return _fail("--axis-px wants 'x,y', got %r" % args.axis_px)
+                if len(axis_px) != 2:
+                    return _fail("--axis-px wants two numbers, got %r" % args.axis_px)
+            build_svg(base, helpers["mask"], helpers["mouth"], helpers["footprint"],
+                      dst, {"D_IC": args.dic, "O_IC": args.oic, "DO": args.do},
+                      axis_px=axis_px,
+                      style=style, svg_style=svg_style,
+                      title="%s %s %s" % (args.prefix, pose, v),
+                      preview_png=os.path.join(
+                          inter, helper_name(args.prefix, pose, "svgcheck_" + v)),
+                      report=lambda m: print("    " + m))
+            made.append(dst)
+        except Exception as exc:
+            print("  FAILED %s SVG: %s" % (v, exc), file=sys.stderr)
+    for m in made:
+        print("  svg  %s" % m)
+    return 0 if made else 1
+
+
+def cmd_patches(args) -> int:
+    """Stage 3: classify one enzyme's residues and rank its epitopes."""
+    from .figures import Runner
+
+    runner = Runner(pymol=args.pymol, dry_run=args.dry_run)
+    out_dir = args.out_dir or "."
+    pass_through = ["structure=%s" % args.structure, "chain=%s" % args.chain,
+                    "out_dir=%s" % out_dir]
+    for key, value in (("name", args.name), ("tunnel", args.tunnel),
+                       ("avoid", args.avoid)):
+        if value:
+            pass_through.append("%s=%s" % (key, value))
+    if args.ligands:
+        pass_through.append("ligands=%s" % ",".join(_split_csv(args.ligands)))
+    # every PatchParams field is overridable on the command line; only the
+    # ones actually given are passed, so the defaults stay in one place
+    for key in ("ligand_r", "channel_r", "shadow_r", "shadow_back", "exposed",
+                "iface_cut", "seed_sasa", "patch_r", "patch_min", "patch_sep",
+                "n_patches", "axis_lo", "axis_hi", "reach_lo", "reach_hi",
+                "avoid_r", "avoid_min_sasa"):
+        value = getattr(args, key, None)
+        if value is not None:
+            pass_through.append("%s=%s" % (key, value))
+    rc = runner.run(runner.script("run_patches.py"), pass_through)
+    if rc:
+        return _fail("run_patches exited %d" % rc)
+    return 0
 
 
 def cmd_hotspots(args) -> int:
@@ -359,9 +511,16 @@ def cmd_hotspots(args) -> int:
         complex_pdb = match[0].complex_pdb
         print("positions from %s" % os.path.basename(complex_pdb))
 
-    if not args.out:
-        return _fail("--out is required: say where the session goes")
+    # One map per enzyme PAIR, not per pose: <prefix>_hotspot-map.pse.
     out = args.out
+    if not out:
+        from .figures import hotspot_map_name
+        base = args.out_dir or (os.path.join(args.output_dir, "figures")
+                                if args.output_dir else ".")
+        out = os.path.join(base, hotspot_map_name(args.prefix))
+        if not args.dry_run:
+            os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        print("writing %s" % out)
     runner = Runner(pymol=args.pymol, dry_run=args.dry_run)
     pass_through = [
         "out=%s" % out,
@@ -464,18 +623,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     f.add_argument("output_dir", help="a pose-search output folder (holds geom*_complex.pdb)")
+    f.add_argument("--prefix", default="fig",
+                   help="goes at the front of every file this step writes (e.g. p6a)")
     f.add_argument("--pse", help="which poses get a PyMOL session")
     f.add_argument("--svg", help="which poses get an editable SVG")
     f.add_argument("--pdb", help="which poses get their complex copied out")
     f.add_argument(
-        "--render", default="monomer",
-        help="which render variant the SVG shows: none, monomer, multimer, both "
-        "(default: monomer)",
-    )
-    f.add_argument(
-        "--cross-section", default="none",
-        help="also assemble the cross-section SVG: none, monomer, multimer, both "
-        "(default: none)",
+        "--render", default="pair",
+        help="which render variant the SVG shows: none, pair, assembly, both "
+        "(default: pair)",
     )
     f.add_argument("--out-dir", help="where the figures go (default: <output_dir>/figures)")
     f.add_argument("--pair-file", help="a pair file, for its render: style section")
@@ -502,6 +658,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     hs.add_argument("output_dir", nargs="?", help="a pose-search output folder")
+    hs.add_argument("--prefix", default="fig",
+                   help="goes at the front of every file this step writes (e.g. p6a)")
     hs.add_argument("--up-pdb", help="prepared upstream enzyme (the pre-sampling route)")
     hs.add_argument("--dn-pdb", help="prepared downstream enzyme")
     hs.add_argument("--tunnel-up", help="normalised upstream tunnel chain")
@@ -520,7 +678,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="closest allowed interprotein approach, A (default 3)")
     hs.add_argument("--complex", help="use this complex PDB instead of computing a placement")
     hs.add_argument("--pose", help="which pose fixes the positions (default: the best)")
-    hs.add_argument("--out", help="where the session goes")
+    hs.add_argument("--out",
+                    help="where the session goes "
+                         "(default: <out-dir>/<prefix>_hotspot-map.pse)")
+    hs.add_argument("--out-dir",
+                    help="folder for the default name (default: the current "
+                         "directory, or <output_dir>/figures if one is given)")
     hs.add_argument("--up-chains", default="", help="upstream chains, comma-separated")
     hs.add_argument("--dn-chains", default="", help="downstream chains, comma-separated")
     hs.add_argument("--up-name", default="up", help="name for the upstream enzyme's objects")
@@ -536,6 +699,83 @@ def build_parser() -> argparse.ArgumentParser:
     hs.add_argument("--pymol", default=None, help="the pymol binary to use")
     hs.add_argument("--dry-run", action="store_true", help="print the step, run nothing")
     hs.set_defaults(func=cmd_hotspots)
+
+    se = sub.add_parser("session", help="build the .pse for chosen poses (no rendering)")
+    se.add_argument("output_dir", help="a pose-search output folder")
+    se.add_argument("--prefix", default="fig", help="front of every file written (e.g. p6a)")
+    se.add_argument("--pse", help="which poses (default top1); same selection language")
+    se.add_argument("--render", default="both", help="none, pair, assembly or both")
+    se.add_argument("--out-dir", help="where sessions go (default <output_dir>/figures)")
+    se.add_argument("--pse-arg", action="append", default=[],
+                    help="extra key=value for the session builder; repeatable")
+    se.add_argument("--pymol", default=None)
+    se.add_argument("--dry-run", action="store_true")
+    se.set_defaults(func=cmd_session)
+
+    rn = sub.add_parser(
+        "render", help="render scenes and assemble SVGs from an existing .pse",
+        description="Takes any session -- ours, or one you rotated and saved "
+                    "yourself -- and writes <prefix>_<pose>_render_<variant>.svg.")
+    rn.add_argument("session", help="the .pse to render")
+    rn.add_argument("--prefix", default="fig", help="front of every file written")
+    rn.add_argument("--pose", default="geom001", help="pose id used in the names")
+    rn.add_argument("--variant", default="both", help="pair, assembly or both")
+    rn.add_argument("--dic", type=float, default=0.0, help="D_IC to label, A")
+    rn.add_argument("--oic", type=float, default=0.0, help="O_IC to label, degrees")
+    rn.add_argument("--do", type=float, default=0.0, help="DO to label")
+    rn.add_argument(
+        "--axis-px", default=None,
+        help="the projected P2->P1 direction as 'x,y' (image y downward), "
+             "which the session reports. REQUIRED for a rolled frame: "
+             "without it the angle marker falls back to assuming the "
+             "P1-P2-P3 plane is face-on, and draws the arm at an angle the "
+             "picture does not contain")
+    rn.add_argument("--out-dir", help="default: beside the session")
+    rn.add_argument("--width", type=int, default=1200)
+    rn.add_argument("--height", type=int, default=900)
+    rn.add_argument("--pymol", default=None)
+    rn.add_argument("--dry-run", action="store_true")
+    rn.set_defaults(func=cmd_render)
+
+    pa = sub.add_parser(
+        "patches", help="stage 3: classify residues and rank the epitopes",
+        description="Writes <name>_residue_classes.tsv and "
+                    "<name>_hotspot_patches.tsv, which the hotspot map and "
+                    "the pose search both read. Edit the patch table by hand "
+                    "or supply your own: nothing downstream cares who wrote "
+                    "it, which is the point of the stage being optional.")
+    pa.add_argument("structure", help="one prepared enzyme, as PDB")
+    pa.add_argument("--chain", default="A", help="which chain to classify")
+    pa.add_argument("--name", help="prefix for the two tables (default: the file stem)")
+    pa.add_argument("--tunnel", help="its normalised CAVER tunnel; without one "
+                                     "there is no mouth, so no CHANNEL or SHADOW class")
+    pa.add_argument("--ligands", help="cofactor resnames, comma separated")
+    pa.add_argument("--avoid", help="PyMOL selection(s) to keep binders away "
+                                    "from, ';' separated (e.g. \"resi 145+158\")")
+    pa.add_argument("--out-dir", help="where the two tables go (default: here)")
+    for key, kind, helptext in (
+            ("ligand_r", float, "within this of a cofactor is LIGAND_CORE"),
+            ("channel_r", float, "within this of the tunnel is CHANNEL"),
+            ("shadow_r", float, "radius of the no-block cylinder at the mouth"),
+            ("shadow_back", float, "how far inside the mouth it still reaches"),
+            ("exposed", float, "SASA at which a residue counts as exposed"),
+            ("iface_cut", float, "dSASA above which a residue is IFACE"),
+            ("seed_sasa", float, "a seed anchor needs this much exposed area"),
+            ("patch_r", float, "patch members lie within this of the seed"),
+            ("patch_min", int, "fewer members than this is not a patch"),
+            ("patch_sep", float, "minimum centroid separation of kept patches"),
+            ("n_patches", int, "how many patches to keep"),
+            ("axis_lo", float, "best band from the channel axis, low end"),
+            ("axis_hi", float, "best band from the channel axis, high end"),
+            ("reach_lo", float, "best band from the mouth, low end"),
+            ("reach_hi", float, "best band from the mouth, high end"),
+            ("avoid_r", float, "how far an exposed avoided residue spreads"),
+            ("avoid_min_sasa", float, "below this it protects only itself")):
+        pa.add_argument("--" + key.replace("_", "-"), dest=key, type=kind,
+                        default=None, help=helptext)
+    pa.add_argument("--pymol", default=None)
+    pa.add_argument("--dry-run", action="store_true")
+    pa.set_defaults(func=cmd_patches)
 
     d = sub.add_parser("do", help="the DO score for one D_IC and O_IC")
     d.add_argument("--dic", type=float, required=True, help="inter-channel distance, A")

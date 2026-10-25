@@ -121,7 +121,7 @@ class TestFindMouths:
         assert len(m) == 2
 
     def test_the_largest_disc_of_a_class_wins(self):
-        # a multimer render can show a second copy of an exit; the figure
+        # a assembly render can show a second copy of an exit; the figure
         # annotates one channel, so the bigger (nearer) disc is the subject
         two = np.minimum(self.mouth, _disc((H, W), 150, 160, 3, 0.0))
         m = find_mouths(two, self.sil)
@@ -483,3 +483,147 @@ class TestTheShippedExample:
         assert SvgStyle.from_dict(style.svg).fill_opacity == 0.30
         assert ClassPalette.from_dict(style.hotspots).classes["CHANNEL"] == "magenta"
         assert style.transparency_for("inspect") == 0.55
+
+
+class TestFocusOutline:
+    """The two protomers the geometry belongs to, picked out of an assembly.
+
+    In the assembly render every copy of both enzymes is drawn and the pose's
+    own pair is distinguished only by being a shade darker -- behind two
+    translucent neighbours that is not much. The outline says it outright.
+    It is traced from the `footprint` render, which holds exactly those two
+    chains, so no extra scene is needed.
+    """
+
+    def _frames(self, w=200, h=160):
+        import numpy as np
+
+        footprint = np.ones((h, w))          # white = nothing
+        footprint[40:120, 40:120] = 0.0      # the focus pair, flat black
+        return footprint
+
+    def test_nothing_is_drawn_on_a_pair_render(self):
+        # there the footprint IS the whole picture, so an outline would just
+        # trace the outside of the frame
+        import numpy as np
+
+        from channelbridge.render.svg import focus_outline
+
+        fp = self._frames()
+        alpha = fp < 0.5                      # only the pair is drawn
+        assert focus_outline(fp, alpha, min_area=10.0) == []
+        assert isinstance(np.asarray(alpha), np.ndarray)
+
+    def test_it_is_drawn_when_other_protomers_are_present(self):
+        from channelbridge.render.svg import focus_outline
+
+        fp = self._frames()
+        alpha = fp < 0.5
+        alpha[10:30, 10:30] = True            # a neighbouring copy
+        alpha[130:150, 130:150] = True        # and another
+        polys = focus_outline(fp, alpha, min_area=10.0)
+        assert polys, "an assembly render should get an outline"
+
+    def test_mismatched_renders_are_refused(self):
+        import numpy as np
+        import pytest
+
+        from channelbridge.render.svg import focus_outline
+
+        with pytest.raises(ValueError, match="different renders"):
+            focus_outline(self._frames(), np.zeros((10, 10), bool))
+
+    def test_a_zero_width_switches_it_off(self):
+        from channelbridge.render.svg import SvgStyle
+
+        assert SvgStyle.from_dict({"focus_stroke_width": 0}).focus_stroke_width == 0.0
+
+
+class TestMouthRing:
+    """An exit that does not reach the silhouette's rim gets a drawn opening.
+
+    On the p6a pose the downstream channel leaves at 58 degrees to the view
+    plane -- it points at the camera -- so its exit projects 31 px INSIDE the
+    traced outline. There is no gap to cut, and without a ring the D_IC line
+    appears to stop in the middle of the channel for no reason. The upstream
+    channel leaves at 11 degrees and sits exactly on the rim, where the gap
+    is the cue and a ring would be clutter.
+    """
+
+    def _mouth_render(self, w=200, h=160, up=(60, 80), dn=(140, 80),
+                      r_up=6, r_dn=6):
+        import numpy as np
+
+        img = np.ones((h, w))
+        yy, xx = np.mgrid[0:h, 0:w]
+        img[(xx - up[0]) ** 2 + (yy - up[1]) ** 2 <= r_up ** 2] = 0.0    # black
+        img[(xx - dn[0]) ** 2 + (yy - dn[1]) ** 2 <= r_dn ** 2] = 0.5    # grey
+        return img
+
+    def test_the_projected_ellipse_is_measured_from_the_render(self):
+        import numpy as np
+
+        from channelbridge.render.svg import find_mouths
+
+        sil = np.zeros((160, 200), bool)
+        sil[60:100, 100:180] = True          # silhouette around the dn disc
+        mouths = find_mouths(self._mouth_render(), sil)
+        dn = mouths["dn"]
+        assert dn.semi_major > 0 and dn.semi_minor > 0
+        # a round disc projects round: the axes should be close
+        assert abs(dn.semi_major - dn.semi_minor) < 0.25 * dn.semi_major
+
+    def test_inset_is_zero_on_the_rim_and_positive_inside(self):
+        import numpy as np
+
+        from channelbridge.render.svg import find_mouths
+
+        sil = np.zeros((160, 200), bool)
+        sil[60:100, 100:180] = True          # dn sits inside this
+        mouths = find_mouths(self._mouth_render(), sil)
+        assert mouths["dn"].inset_px > 0, "inside the silhouette"
+        assert mouths["up"].inset_px == 0, "nowhere near it"
+
+    def test_a_zero_width_switches_it_off(self):
+        from channelbridge.render.svg import SvgStyle
+
+        assert SvgStyle.from_dict({"mouth_ring_width": 0}).mouth_ring_width == 0.0
+
+
+class TestTheArmMustBeMeasuredOnARolledFrame:
+    """`angle_marker` without `axis_px` assumes the P1-P2-P3 plane is face-on.
+
+    That holds in the angle frame and nowhere else. On the p6a pose rolled
+    160 degrees about the arm, the fallback drew the arm at -151 deg where
+    the session has it at -180 -- 29 deg of pure invention, while still
+    showing the correct 165 deg BETWEEN arm and line, which is what made it
+    look right.
+    """
+
+    def test_the_fallback_says_it_is_a_fallback(self):
+        from channelbridge.render.svg import angle_marker
+
+        m = angle_marker((100.0, 100.0), (200.0, 120.0), 165.0, 110.0, 150.0)
+        assert not m.exact, "an assumed arm must be flagged as assumed"
+
+    def test_a_given_axis_is_used_verbatim(self):
+        import numpy as np
+
+        from channelbridge.render.svg import angle_marker
+
+        m = angle_marker((100.0, 100.0), (200.0, 120.0), 165.0, 110.0, 150.0,
+                         axis_px=(-1.0, 0.0))
+        assert m.exact
+        arm = np.asarray(m.arm_start, float) - np.asarray(m.vertex, float)
+        # horizontal, pointing the way we said
+        assert abs(float(arm[1])) < 1e-6, "a horizontal arm must draw horizontal"
+        assert float(arm[0]) < 0.0
+
+    def test_a_zero_axis_is_refused_not_normalised_to_nothing(self):
+        import pytest
+
+        from channelbridge.render.svg import angle_marker
+
+        with pytest.raises(ValueError, match="zero length"):
+            angle_marker((100.0, 100.0), (200.0, 120.0), 165.0, 110.0, 150.0,
+                         axis_px=(0.0, 0.0))

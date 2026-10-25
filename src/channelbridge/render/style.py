@@ -381,6 +381,12 @@ class RenderStyle:
     transparency: Transparency = field(default_factory=Transparency)
     background: str = "white"
     stick_radius: float = 0.45
+    #: How far the assembly's non-pose protomers are lightened towards white,
+    #: 0 = their enzyme's full colour, 1 = white. One value for all of them:
+    #: the copies are not ordered, so a per-copy gradient claims a ranking
+    #: that does not exist, and its pale end washed both enzymes out to the
+    #: same near-white.
+    copy_lighten: float = 0.45
     #: The pair file's ``render.svg:`` block, kept raw. The SVG assembler
     #: (:mod:`channelbridge.render.svg`) validates and consumes it; holding it
     #: here means a pair file carries one ``render:`` section rather than two,
@@ -393,12 +399,17 @@ class RenderStyle:
 
     _ALLOWED = (
         "colors", "colours", "palette",
-        "transparency", "background", "stick_radius", "svg", "hotspots",
+        "transparency", "background", "stick_radius", "copy_lighten",
+        "svg", "hotspots",
     )
 
     def __post_init__(self):
         if float(self.stick_radius) <= 0:
             raise ValueError("stick_radius must be positive, got %r" % (self.stick_radius,))
+        if not 0.0 <= float(self.copy_lighten) < 1.0:
+            raise ValueError(
+                "copy_lighten must be in [0, 1); 1 is white, which would hide "
+                "the copies entirely. Got %r" % (self.copy_lighten,))
         if self.background != "white":
             parse_color(self.background)
 
@@ -423,6 +434,7 @@ class RenderStyle:
             ),
             background=str(raw.get("background", "white")),
             stick_radius=float(raw.get("stick_radius", 0.45)),
+            copy_lighten=float(raw.get("copy_lighten", 0.45)),
             svg=dict(raw.get("svg") or {}),
             hotspots=dict(raw.get("hotspots") or {}),
         )

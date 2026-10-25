@@ -33,11 +33,11 @@ failing, or silently producing nothing.
 Scene variants
 --------------
 
-``render`` and ``cross_section`` are optional and each take
-``none | monomer | multimer | both``:
+``render`` is optional and takes
+``none | pair | assembly | both``:
 
-* ``monomer``  -- the two posed protomers alone (the ``_complex`` structure)
-* ``multimer`` -- the full assembly with symmetry copies (``_occupancy``)
+* ``pair``  -- the two posed protomers alone (the ``_complex`` structure)
+* ``assembly`` -- the full assembly with symmetry copies (``_occupancy``)
 * ``both``     -- both, as separate scenes sharing one camera
 """
 
@@ -57,8 +57,8 @@ __all__ = [
     "resolve",
 ]
 
-#: Accepted values for the optional ``render`` / ``cross_section`` scenes.
-VARIANTS = ("none", "monomer", "multimer", "both")
+#: Accepted values for the optional ``render`` scene.
+VARIANTS = ("none", "pair", "assembly", "both")
 
 _RANK_RANGE = re.compile(r"^(?:rank|#)(\d+)\s*-\s*(\d+)$", re.I)
 _RANK_ONE = re.compile(r"^(?:rank|#)(\d+)$", re.I)
@@ -187,14 +187,24 @@ def parse_spec(spec, ranked: Sequence[Pose], what: str = "selection") -> List[st
 
 
 def parse_variant(spec, what: str = "scene") -> str:
-    """Validate a ``none|monomer|multimer|both`` option."""
+    """Validate a ``none|pair|assembly|both`` option.
+
+    ``pair`` is one protomer of each enzyme -- the two chains the DO geometry
+    is defined on. ``assembly`` is every protomer of both. The earlier names
+    ``monomer``/``multimer`` are accepted as aliases but were misleading: the
+    "monomer" scene was never a monomer.
+    """
     if spec is None:
         return "none"
     s = str(spec).strip().lower()
     if s == "":
         return "none"
-    aliases = {"mono": "monomer", "multi": "multimer", "complex": "monomer",
-               "occupancy": "multimer", "all": "both"}
+    # The old spellings stay as aliases: "monomer" was a bad name -- the
+    # scene holds TWO chains, one protomer of each enzyme -- but anything
+    # already written against it should keep working.
+    aliases = {"mono": "pair", "monomer": "pair", "protomers": "pair",
+               "multi": "assembly", "multimer": "assembly", "complex": "pair",
+               "occupancy": "assembly", "full": "assembly", "all": "both"}
     s = aliases.get(s, s)
     if s not in VARIANTS:
         raise ValueError(
@@ -214,7 +224,6 @@ class FigurePlan:
     pse_added_for_svg: List[str] = field(default_factory=list)
     pse_reused: List[str] = field(default_factory=list)
     render: str = "none"
-    cross_section: str = "none"
     notes: List[str] = field(default_factory=list)
 
     @property
@@ -244,8 +253,7 @@ class FigurePlan:
         if self.pse_reused:
             lines.append("     + session(s) already on disk, not rebuilt: %s"
                          % ", ".join(self.pse_reused))
-        lines.append("scenes   classes, occupancy, render=%s, cross_section=%s"
-                     % (self.render, self.cross_section))
+        lines.append("scenes   classes, occupancy, render=%s" % self.render)
         lines.extend("note     %s" % n for n in self.notes)
         return "\n".join(lines)
 
@@ -256,7 +264,6 @@ def resolve(
     svg=None,
     pdb=None,
     render="none",
-    cross_section="none",
     existing_pse: Sequence[str] = (),
     rebuild: bool = False,
 ) -> FigurePlan:
@@ -275,7 +282,6 @@ def resolve(
     ranked = rank_poses(poses)
     plan = FigurePlan(ranked=ranked)
     plan.render = parse_variant(render, "render")
-    plan.cross_section = parse_variant(cross_section, "cross_section")
 
     plan.pse = parse_spec(pse, ranked, "--pse")
     plan.svg = parse_spec(svg, ranked, "--svg")
@@ -306,8 +312,8 @@ def resolve(
     plan.pse_added_for_svg = [p.pose_id for p in ranked if p.pose_id in set(plan.pse_added_for_svg)]
     plan.pse_reused = [p.pose_id for p in ranked if p.pose_id in set(plan.pse_reused)]
 
-    if plan.svg and plan.render == "none" and plan.cross_section == "none":
+    if plan.svg and plan.render == "none":
         plan.notes.append(
-            "an SVG was asked for but both render and cross_section are 'none'; "
-            "the SVG is traced from those scenes, so set at least one")
+            "an SVG was asked for but render is 'none'; the SVG is traced from "
+            "that scene, so set at least one variant")
     return plan

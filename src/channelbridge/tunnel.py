@@ -81,6 +81,7 @@ __all__ = [
     "Tunnel",
     "burial_at",
     "burial_verdict",
+    "fitted_axis",
 ]
 
 #: Radius of the sphere burial is counted in, in angstroms.
@@ -127,6 +128,33 @@ def burial_at(points, protein_xyz, radius: float = BURIAL_RADIUS) -> np.ndarray:
         d = np.linalg.norm(prot[None, :, :] - block[:, None, :], axis=2)
         out[i : i + 64] = (d <= radius).sum(axis=1)
     return out
+
+
+def fitted_axis(xyz, n_spheres: int = 5, *, source: str = "<points>") -> np.ndarray:
+    """Outward mouth direction fitted over the last *n_spheres* of a chain.
+
+    A free function because two callers need it and neither should own a
+    second copy: :meth:`Tunnel.fitted_axis`, and the stage-3 shim, which has
+    the sphere coordinates from PyMOL rather than a Tunnel. It WAS duplicated,
+    and the inline copy was the one nothing tested.
+
+    NOT the same vector as the O_IC arm, and the difference is not noise: on
+    these tunnels the two disagree by 9-12 degrees. The arm is a short
+    baseline because O_IC is defined on one; this is a fit over several
+    spheres, because consecutive CAVER spheres sit ~1 A apart and a single
+    pair is dominated by placement jitter. Steady enough to classify a whole
+    surface against, which is what the residue classes need -- using the pair
+    instead made the ported stage 3 disagree with its reference.
+    """
+    pts = np.asarray(xyz, dtype=float)
+    n = max(2, int(n_spheres))
+    tail = pts[-min(len(pts), n):]
+    if len(tail) < 2:
+        raise ValueError("tunnel %s: need at least two spheres to fit an axis" % source)
+    u = np.linalg.svd(tail - tail.mean(axis=0))[2][0]
+    if float(u @ (pts[-1] - pts[0])) < 0:
+        u = -u
+    return u / float(np.linalg.norm(u))
 
 
 @dataclass(frozen=True)
@@ -475,6 +503,25 @@ class Tunnel:
         if n == 0.0:
             raise ValueError("tunnel %s: zero-length axis over a %.2f A arm" % (self.source, arm))
         return v / n
+
+    def fitted_axis(self, n_spheres: int = 5) -> np.ndarray:
+        """Outward mouth direction, fitted over the last *n_spheres*.
+
+        NOT the same vector as :meth:`axis`, and the difference is not noise:
+        on these tunnels the two disagree by 9-12 degrees.
+
+        :meth:`axis` is the O_IC arm -- exit minus a point one arm-length
+        back -- and it is what the iMARS angle is defined on, so it must stay
+        a short baseline however jittery that makes it. This one is the first
+        principal component of the outer spheres, sign-corrected to point out
+        of the protein. Consecutive CAVER spheres sit ~1 A apart, so a single
+        pair is noisy; a fit over several is steady enough to classify a
+        whole surface against, which is what the residue classes need.
+
+        Use this for geometry ABOUT the mouth (is a residue in the shadow,
+        how far off the axis does it sit). Use :meth:`axis` for O_IC itself.
+        """
+        return fitted_axis(self.xyz, n_spheres, source=self.source)
 
     def axis_spread(self, arms: Sequence[float] = (0.5, 1.0, 2.0), *, strict: bool = False) -> float:
         """Largest angle, in degrees, between the mouth axes over *arms*.

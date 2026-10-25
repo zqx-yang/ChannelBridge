@@ -36,7 +36,7 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from .style import RenderStyle, lighten, parse_color
+from .style import lighten, parse_color
 
 __all__ = [
     "CLASS_ORDER",
@@ -90,7 +90,8 @@ class ClassPalette:
     #: colour on the best-ranked patch instead.
     best_is_darkest: bool = False
     ligand: str = "orange"
-    binder: str = "palegreen"
+    #: The designed binder's house colour (user, standing).
+    binder: str = "#0065bd"
     label: str = "black"
     #: How far the BACKGROUND classes are mixed towards white, so that the
     #: patches are the only saturated thing on the surface. At full
@@ -353,6 +354,53 @@ def _rank_number(rank) -> float:
 
 
 @dataclass
+class MapObjects:
+    """The named object groups a map session is built from.
+
+    Eight bare ``List[str]`` locals threaded through a 400-line function is
+    what this replaces. The groups are not interchangeable -- a scene is
+    defined by which of THESE it shows -- so giving them a type makes the
+    scene definitions read as what they mean, and makes it impossible to
+    append a tunnel to the ligand list without noticing.
+    """
+
+    #: One translucent whole-enzyme surface per enzyme; everything else is
+    #: solid and sits on top of it.
+    base: List[str] = field(default_factory=list)
+    #: One per residue class per enzyme. Together they partition the surface.
+    classes: List[str] = field(default_factory=list)
+    patches: List[str] = field(default_factory=list)
+    tunnels: List[str] = field(default_factory=list)
+    mouths: List[str] = field(default_factory=list)
+    ligands: List[str] = field(default_factory=list)
+    #: Minimum-binder envelopes, one per patch.
+    envelopes: List[str] = field(default_factory=list)
+    #: Patch names. Built, and off unless asked for.
+    labels: List[str] = field(default_factory=list)
+    #: The iMARS annotation. Built, and off: the map is about the epitopes.
+    annotation: List[str] = field(default_factory=list)
+
+    @property
+    def structure(self) -> List[str]:
+        """Everything that is always shown: the surface and what is in it."""
+        return self.base + self.tunnels + self.mouths + self.ligands
+
+    def scene(self, *, classes: bool = True, patches: bool = True,
+              envelopes: bool = False, labels: bool = False) -> List[str]:
+        """The object list for one scene, by what it shows."""
+        out = list(self.structure)
+        if classes:
+            out += self.classes
+        if patches:
+            out += self.patches
+        if envelopes:
+            out += self.envelopes
+        if labels:
+            out += self.labels
+        return out
+
+
+@dataclass
 class HotspotMapSpec:
     """What the map session is built from."""
 
@@ -381,10 +429,36 @@ class HotspotMapSpec:
     #: is a line of text -- far wider than it is tall -- so these differ by a
     #: lot; a single circular distance either leaves wide labels overlapping
     #: or throws short ones much too far from the patch they name.
-    label_sep_x: float = 34.0
-    label_sep_y: float = 11.0
-    up_name: str = "up"
-    dn_name: str = "dn"
+    # A label is a line of text, so it needs far more room across than down.
+    # These are the gaps between label ANCHORS, in Angstrom, and they carry a
+    # margin on top of the text's own width: the session renders in
+    # perspective (the view's field-of-view slot is -20), so a label nearer
+    # the camera prints larger and shifted from where an orthographic
+    # projection puts it, and separation measured on that projection comes up
+    # a little short. At 34 the two most crowded FNR labels still overprinted.
+    label_sep_x: float = 46.0
+    label_sep_y: float = 13.0
+    #: Keep labels within the drawn pair plus this margin, in Angstrom, so a
+    #: label pushed clear of its neighbours is not pushed off the picture.
+    label_margin: float = 10.0
+    #: How far in front of the nearest atom a lifted label sits, in Angstrom.
+    label_lift: float = 2.0
+    #: Probe radius for the patch surfaces. PyMOL's default is 1.4; a little
+    #: larger lifts a patch clear of the coincident class surface beneath it.
+    patch_probe: float = 1.7
+    #: Patch labels are BUILT but start switched off (user, 2026-10-25).
+    #: Ten names on two crowded faces could not be placed without some of
+    #: them landing away from the patch they name, and every patch is its own
+    #: object with its own name, so the object list is the legend. Switch
+    #: them on per scene if you want them in a figure.
+    show_labels: bool = False
+    #: What to call each enzyme. Every object in the session is named from
+    #: these -- `<up_name>_patch_01`, `<up_name>_patch_01_binder`,
+    #: `<up_name>_channel`, `<up_name>_tunnel` -- so giving the real names
+    #: makes the object list readable without a legend. The defaults say
+    #: which side each is rather than pretending to a name we do not have.
+    up_name: str = "Eup"
+    dn_name: str = "Edn"
     up_chains: Sequence[str] = ()
     dn_chains: Sequence[str] = ()
     classes_up: Optional[str] = None
@@ -394,11 +468,21 @@ class HotspotMapSpec:
     ligand_resn: Sequence[str] = ()
     binder_radius: float = 11.0
     palette: ClassPalette = field(default_factory=ClassPalette)
-    #: How see-through the surfaces are. The same "inspect" value the pose
-    #: session's classes/occupancy scenes use, so the two sessions of one
-    #: figure set look alike and one override changes both.
-    transparency: float = field(
-        default_factory=lambda: RenderStyle().transparency_for("inspect"))
+    #: How see-through the surfaces are. **Solid by default**, and that is
+    #: deliberate: this session exists to be toggled. You switch a patch
+    #: object off and on to see exactly which bit of surface it covers, and
+    #: through a translucent surface you cannot tell whether what you are
+    #: looking at is the patch in front or the class behind it.
+    #:
+    #: They were translucent for a while, to keep the cofactors visible
+    #: inside a solid surface. That reason is gone: every class, patch,
+    #: ligand, mouth and tunnel is now its OWN object, so the way to see
+    #: inside is to hide what is in front, not to see through it.
+    transparency: float = 0.0
+    #: The whole-enzyme base, the one translucent thing in the session. Every
+    #: element drawn on top of it is solid, so switching one on reads as
+    #: "this patch, here, on this surface".
+    base_transparency: float = 0.55
     #: Chains to paint from each table. The class tables are written for one
     #: protomer; the other protomers of a homo-oligomer are identical, so the
     #: same residue numbers are painted on all of them.
@@ -409,6 +493,47 @@ class HotspotMapSpec:
 
     def name(self, which: str) -> str:
         return self.up_name if which == "up" else self.dn_name
+
+
+def _protomer_transforms(cmd, obj, primary, chains, report):
+    """Rigid transforms taking the primary protomer onto each of the others.
+
+    The upstream enzyme is an oligomer and the downstream one, as prepared,
+    is a single chain -- so the assembly's extra downstream copies do not
+    exist in any file and have to be generated. Each is the SAME placement,
+    carried onto another protomer by that protomer's own symmetry operator,
+    which is what the pose search does when it writes an occupancy model.
+
+    Fitted on matched CA atoms rather than assumed to be a crystal operator,
+    because a prepared structure may have been renumbered or trimmed.
+    """
+    out = []
+    def ca(ch):
+        m = cmd.get_model("%s and chain %s and polymer and name CA" % (obj, ch))
+        return {a.resi: np.asarray(a.coord, float) for a in m.atom}
+    ref = ca(primary)
+    if not ref:
+        return out
+    for ch in chains:
+        if ch == primary:
+            continue
+        q = ca(ch)
+        shared = sorted(set(ref) & set(q))
+        if len(shared) < 20:
+            report("  chain %s shares only %d CA with %s; no copy made"
+                   % (ch, len(shared), primary))
+            continue
+        P = np.array([ref[r] for r in shared])
+        Q = np.array([q[r] for r in shared])
+        pc, qc = P.mean(0), Q.mean(0)
+        U, _, Vt = np.linalg.svd((P - pc).T @ (Q - qc))
+        d = np.sign(np.linalg.det(Vt.T @ U.T))
+        R = Vt.T @ np.diag([1.0, 1.0, d]) @ U.T
+        t = qc - R @ pc
+        rms = float(np.sqrt((((P @ R.T + t) - Q) ** 2).sum(1).mean()))
+        out.append((ch, R, t))
+        report("  protomer %s: %d CA, rms %.2f A" % (ch, len(shared), rms))
+    return out
 
 
 def patch_centroids(coords_by_resi: Mapping[int, Sequence[float]],
@@ -514,7 +639,7 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
         clear_view_about_axis,
         patch_outward_normal,
     )
-    from .frame import Frame, pymol_view, spread_in_view
+    from .frame import Frame, lift_to_front, pymol_view, spread_in_view
     from .scenes import _apply, _ca_by_resi, _pseudo_spheres
     from .style import INSPECT_SETTINGS
 
@@ -528,6 +653,7 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
     # ---- the structures, in a relative position
     placement = None
     frame = None
+    symmetry: List[Tuple[str, np.ndarray, np.ndarray]] = []
     up_obj, dn_obj = spec.up_name, spec.dn_name
     if spec.complex_pdb:
         cmd.load(spec.complex_pdb, "cplx")
@@ -543,14 +669,25 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
         info["placement"] = placement.describe()
         info["complex"] = "%s + %s, placed here" % (os.path.basename(spec.up_pdb),
                                                     os.path.basename(spec.dn_pdb))
-        cmd.load(spec.up_pdb, up_obj)
+        cmd.load(spec.up_pdb, up_obj + "_all")
+        # The PAIR is one protomer of each. Everything -- classes, patches,
+        # envelopes -- is built on it, and the assembly is then made by
+        # replicating that pair with the upstream oligomer's own symmetry, so
+        # the two scenes show the same things and differ only in how many
+        # copies. Building the classes across all chains instead would give
+        # an assembly with no pair inside it to show on its own.
+        up_all_chains = [c for c in cmd.get_chains(up_obj + "_all") if c.strip()]
+        primary = (spec.chains("up") or up_all_chains or [""])[0]
+        cmd.create(up_obj, "%s_all and chain %s" % (up_obj, primary)
+                   if primary else up_obj + "_all")
         cmd.load(spec.dn_pdb, dn_obj)
         cmd.transform_object(dn_obj, _pymol_matrix(placement.rotation,
                                                    placement.translation))
+        symmetry[:] = _protomer_transforms(cmd, up_obj + "_all", primary,
+                                           up_all_chains, report)
+        cmd.delete(up_obj + "_all")
 
     cmd.hide("everything", "all")
-    for obj in (up_obj, dn_obj):
-        cmd.show("surface", "%s and polymer" % obj)
 
     # ---- the classification, painted IN PLACE on each enzyme
     #
@@ -562,8 +699,24 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
     # The same colour for the same class on BOTH enzymes: the subject here is
     # the classification, and two surface colours for one class would read as
     # two classes.
+    # ONE OBJECT PER CLASS, per enzyme.
+    #
+    # The p5d original colours the classes in place on one surface and keeps
+    # 31 named SELECTIONS beside it (GDH_surface, GDH_avoid, GDH_patch_01 ...).
+    # A selection can be picked but not hidden: hiding it does not hide the
+    # parent's surface. With seven translucent classes on one object every
+    # colour is seen through every colour behind it, which is what made the
+    # elements hard to tell apart.
+    #
+    # Objects fix that, and the classes make it clean: they PARTITION the
+    # residues, so the union of the per-class objects is exactly the whole
+    # surface. All on = the complete enzyme; switch one off and only that part
+    # disappears. No double-drawing, no gaps.
     painted: Dict[str, int] = {}
-    for path, obj in ((spec.classes_up, up_obj), (spec.classes_dn, dn_obj)):
+    objs = MapObjects()
+    class_objs = objs.classes
+    for which, path, obj in (("up", spec.classes_up, up_obj),
+                             ("dn", spec.classes_dn, dn_obj)):
         if not path:
             continue
         table = read_residue_classes(path)
@@ -572,31 +725,46 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
             colour = pal.classes.get(cls)
             if not resi or colour is None:
                 continue
-            key = "c_cls_%s" % cls.lower()
+            name = "%s_%s" % (spec.name(which), cls.lower())
+            cmd.create(name, "%s and resi %s and polymer"
+                       % (obj, "+".join(str(r) for r in resi)))
+            if cmd.count_atoms(name) == 0:
+                cmd.delete(name)
+                continue
+            cmd.hide("everything", name)
+            cmd.show("surface", name)
             rgb = parse_color(colour)
             if cls in pal.background_classes:
                 rgb = lighten(rgb, pal.class_lighten)
+            key = "c_cls_%s" % cls.lower()
             cmd.set_color(key, [float(c) for c in rgb])
-            cmd.color(key, "%s and resi %s and polymer"
-                      % (obj, "+".join(str(r) for r in resi)))
+            cmd.color(key, name)
+            cmd.set("transparency", spec.transparency, name)
+            class_objs.append(name)
             painted[cls] = painted.get(cls, 0) + len(resi)
     for cls in CLASS_ORDER:
         if cls in painted:
-            info["objects"].append("%-12s %-8s %d residue(s) over both enzymes"
+            info["objects"].append("%-12s %-8s %d residue(s), own object per enzyme"
                                    % (cls, pal.classes.get(cls), painted[cls]))
 
-    n_up = len(info["patches"].get(spec.up_name, [])) if info.get("patches") else 6
-    for a, b, d in pal.indistinguishable(max(6, n_up)):
-        report("WARNING: %s and %s are %.2f apart in colour and may not be "
-               "tellable apart on a shaded surface" % (a, b, d))
-
+    # ligands as objects, one per enzyme, so they can be toggled like the rest
+    ligand_objs = objs.ligands
     if spec.ligand_resn:
-        sel = "(%s or %s) and resn %s" % (up_obj, dn_obj, "+".join(spec.ligand_resn))
         cmd.set_color("c_lig", [float(c) for c in parse_color(pal.ligand)])
-        cmd.color("c_lig", sel)
-        cmd.show("sticks", sel)
-        cmd.set("stick_radius", 0.45)
-        cmd.set("stick_ball", 0)
+        for which, obj in (("up", up_obj), ("dn", dn_obj)):
+            name = "%s_ligands" % spec.name(which)
+            cmd.create(name, "%s and resn %s" % (obj, "+".join(spec.ligand_resn)))
+            if cmd.count_atoms(name) == 0:
+                cmd.delete(name)
+                continue
+            cmd.hide("everything", name)
+            cmd.show("sticks", name)
+            cmd.color("c_lig", name)
+            cmd.set("stick_radius", 0.45, name)
+            cmd.set("stick_ball", 0, name)
+            ligand_objs.append(name)
+        if ligand_objs:
+            info["objects"].append("ligands as objects: " + ", ".join(ligand_objs))
 
     for obj in (up_obj, dn_obj):
         cmd.set("transparency", spec.transparency, "%s and polymer" % obj)
@@ -611,9 +779,10 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
 
     # ---- the tunnels, as objects. Nearly opaque: they are inside a
     # translucent surface and a translucent tunnel inside it disappears.
-    tunnel_objs: List[str] = []
-    mouth_objs: List[str] = []
+    tunnel_objs = objs.tunnels
+    mouth_objs = objs.mouths
     exits: Dict[str, np.ndarray] = {}
+    arms: Dict[str, np.ndarray] = {}
     axis_vector = None
     for which, path in (("up", spec.tunnel_up), ("dn", spec.tunnel_dn)):
         if not path:
@@ -631,6 +800,9 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
                         tuple(float(c) for c in parse_color(pal.mouth)), 0.0)
         mouth_objs.append(mouth)
         exits[which] = np.asarray(xyz[-1], float)
+        if which == "up" and len(xyz) >= 2:
+            # one sphere back along the chain: the O_IC arm's far point
+            arms["p1"] = np.asarray(xyz[-2], float)
         info["objects"].append("%s (%d spheres) + %s" % (name, len(xyz), mouth))
     if "up" in exits and "dn" in exits:
         info["objects"].append(
@@ -660,7 +832,7 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
         cam_x, cam_y, cam_z = clear_view_about_axis(up_coords, dn_coords, axis_vector)
         frame = Frame(axes=np.stack([cam_x, cam_y, cam_z]),
                       centre=np.vstack([up_coords, dn_coords]).mean(axis=0))
-        cmd.set_view(pymol_view(frame))
+        cmd.set_view(pymol_view(frame, orthoscopic=True))
         info["objects"].append(
             "camera: the two enzymes across the screen, upstream left, roll "
             "chosen for least projected overlap")
@@ -674,9 +846,9 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
     # with only the patches coloured on it, while "classes" and "map" keep
     # the full classification. Two objects rather than one, because a PyMOL
     # scene does not reliably store per-atom colour.
-    plain = {}
+    base = {}
     for which, obj in (("up", up_obj), ("dn", dn_obj)):
-        twin = obj + "_plain"
+        twin = obj + "_base"
         cmd.create(twin, obj)
         cmd.hide("everything", twin)
         cmd.show("surface", "%s and polymer" % twin)
@@ -685,17 +857,22 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
         if spec.ligand_resn:
             cmd.color("c_lig", "%s and resn %s" % (twin, "+".join(spec.ligand_resn)))
             cmd.show("sticks", "%s and resn %s" % (twin, "+".join(spec.ligand_resn)))
-        cmd.set("transparency", spec.transparency, "%s and polymer" % twin)
-        cmd.set("transparency", spec.transparency, twin)
-        plain[which] = twin
-    info["objects"].append("%s + %s (neutral %s twins, for the patch scenes)"
-                           % (plain["up"], plain["dn"], pal.neutral))
+        # TRANSLUCENT, and the only translucent thing in the session. It is
+        # the whole enzyme, drawn so that a solid element switched on over it
+        # reads as "here, on this surface" -- which is the one question this
+        # session exists to answer. Every element on top of it is solid.
+        cmd.set("transparency", spec.base_transparency, "%s and polymer" % twin)
+        cmd.set("transparency", spec.base_transparency, twin)
+        base[which] = twin
+    info["objects"].append("%s + %s (translucent %s base, transparency %.2f)"
+                           % (base["up"], base["dn"], pal.neutral,
+                              spec.base_transparency))
 
     # ---- the patches, in place, in one hue, each labelled, each with the
     # envelope a minimum-length binder on it would occupy
-    patch_objs: List[str] = []
-    env_objs: List[str] = []
-    label_objs: List[str] = []
+    patch_objs = objs.patches
+    env_objs = objs.envelopes
+    label_objs = objs.labels
     pending_labels: List[tuple] = []
     for which, path, obj in (("up", spec.patches_up, up_obj),
                              ("dn", spec.patches_dn, dn_obj)):
@@ -704,6 +881,20 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
         patches = read_patch_table(path)
         shades = patch_gradient(len(patches), pal.patch_base, pal.patch_light,
                                 pal.patch_dark, pal.best_is_darkest)
+        # EVERY protomer, not just one. The patch objects already span all
+        # chains (the selection has no chain term), but the envelope was
+        # placed at a single centroid taken from a resi->coord map, where
+        # residue numbers collide across chains and one protomer silently
+        # won. The point of the assembly view is to see whether binders on
+        # neighbouring copies collide, which needs all of them.
+        chains = [c for c in cmd.get_chains(obj) if c.strip()] or [""]
+        per_chain = {}
+        for ch in chains:
+            where = "%s and chain %s" % (obj, ch) if ch else obj
+            if cmd.count_atoms("%s and polymer" % where) == 0:
+                continue
+            per_chain[ch] = (patch_centroids(_ca_by_resi(cmd, where), patches),
+                             cmd.get_coords("%s and polymer" % where))
         coords = _ca_by_resi(cmd, obj)
         centroids = patch_centroids(coords, patches)
         surface = cmd.get_coords("%s and polymer" % obj)
@@ -717,14 +908,30 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
                 continue
             key = "c_%s" % tag.lower()
             cmd.set_color(key, [float(c) for c in shade])
-            # ONLY on the neutral twin. Painting the patches onto the
-            # classified object as well destroys both readings at once: the
-            # classification gets red holes in it and the patches compete
-            # with six other colours. The classified objects stay pure.
-            cmd.color(key, sel.replace(obj, plain[which], 1))
-            # a named selection, not an object: the colour is already on the
-            # parent surface, and this is so the patch can be picked later
-            cmd.select(tag, sel)
+            # An OBJECT, not a named selection. A selection can be picked but
+            # not hidden -- hiding it leaves the parent's surface drawn -- so
+            # with everything on one object each element is seen through every
+            # element behind it. As an object a patch can be switched off.
+            cmd.create(tag, sel)
+            if cmd.count_atoms(tag) == 0:
+                cmd.delete(tag)
+                continue
+            cmd.hide("everything", tag)
+            cmd.show("surface", tag)
+            cmd.color(key, tag)
+            cmd.set("transparency", 0.0, tag)   # the patches are the subject
+            # A patch and the class object under it are built from the SAME
+            # atoms, so their surfaces are coincident and which one is drawn
+            # is up to depth-buffer luck -- switching a patch off and on in
+            # the classes scene could leave it behind the class surface.
+            # A slightly larger probe inflates the patch surface just outside
+            # the class one, so the patch always wins. It is a rendering
+            # radius, not a coordinate: nothing moves.
+            cmd.set("solvent_radius", spec.patch_probe, tag)
+            # The base underneath is NOT tinted. It was, so that the scene
+            # still read with the patch objects off -- which meant switching
+            # a patch off changed nothing visible, and toggling, the whole
+            # point of the session, silently did not work.
             patch_objs.append(tag)
             drawn.append(tag)
             centre = centroids.get(patch.label)
@@ -744,15 +951,32 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
             pending_labels.append(
                 (lab, np.asarray(centre, float) + normal * (spec.binder_length + 8.0),
                  "%s %s" % (spec.name(which), patch.label.replace("patch_", "p"))))
-            pts, radii = binder_blobs(centre, normal, spec.binder_length,
-                                      spec.binder_step, spec.binder_radius)
+            # One envelope object per patch, carrying a blob chain for EVERY
+            # protomer that has this patch -- the same object, so it toggles
+            # with the patch it belongs to.
+            all_pts, all_rad, placed = [], [], 0
+            for _ch, (cens, surf) in sorted(per_chain.items()):
+                c = cens.get(patch.label)
+                if c is None:
+                    continue
+                n_ch = patch_outward_normal(surf, c)
+                pts_ch, rad_ch = binder_blobs(c, n_ch, spec.binder_length,
+                                              spec.binder_step, spec.binder_radius)
+                all_pts.extend(pts_ch)
+                all_rad.extend(rad_ch)
+                placed += 1
+            if not all_pts:
+                fallback = binder_blobs(centre, normal, spec.binder_length,
+                                        spec.binder_step, spec.binder_radius)
+                all_pts, all_rad, placed = list(fallback[0]), list(fallback[1]), 1
+            pts, radii = np.asarray(all_pts, float), list(all_rad)
             env = tag + "_binder"
             _pseudo_spheres(cmd, env, pts, radii,
                             tuple(float(c) for c in parse_color(pal.binder)),
                             pal.binder_transparency)
             env_objs.append(env)
             info["envelopes"][tag] = {"centroid": [round(float(x), 2) for x in centre],
-                                      "blobs": len(pts)}
+                                      "blobs": len(pts), "protomers": placed}
         info["patches"][spec.name(which)] = drawn
         report("%s: %d patch(es), shades %s"
                % (spec.name(which), len(drawn),
@@ -762,8 +986,35 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
     if pending_labels:
         anchors = np.array([a for _, a, _ in pending_labels])
         if frame is not None:
+            # The frame is zoomed to the two enzymes, so anything beyond their
+            # extent is at or past the edge of the picture. Bounding the
+            # relaxation by that box keeps a crowded label beside its own
+            # enzyme instead of trading an overlap for a label in the margin.
+            both = np.vstack([up_coords, dn_coords])
+            u, v = both @ cam_x, both @ cam_y
+            m = float(spec.label_margin)
+            bounds = (u.min() - m, u.max() + m, v.min() - m, v.max() + m)
             anchors = anchors + spread_in_view(
-                anchors, cam_x, cam_y, min_sep=(spec.label_sep_x, spec.label_sep_y))
+                anchors, cam_x, cam_y,
+                min_sep=(spec.label_sep_x, spec.label_sep_y), bounds=bounds)
+            # ...then forward, so a label naming a patch on the far side is
+            # not drawn behind the near surface. Separately from the spread:
+            # that one works in the camera plane and must not touch depth,
+            # this one touches nothing else.
+            lift = lift_to_front(anchors, frame.toward_viewer, both,
+                                 spec.label_lift)
+            moved = int((np.linalg.norm(lift, axis=1) > 1e-6).sum())
+            if moved:
+                report("%d label(s) lifted in front of the surface "
+                       "(they named far-side patches)" % moved)
+            anchors = anchors + lift
+        # Draw labels IN FRONT of everything. A label sits at its patch's own
+        # depth, so one naming a patch on the far side of the enzyme renders
+        # behind the near surface and washes out to unreadable -- which is
+        # what happened to two of the FNR names. Separating them in the camera
+        # plane cannot fix that: the collision is in depth, and the separation
+        # deliberately never changes depth. This does, and only for labels.
+        cmd.set("float_labels", 1)   # helps in the viewport; a ray trace ignores it
         cmd.set_color("c_lab", [float(c) for c in parse_color(pal.label)])
         for (lab, _, text), pos in zip(pending_labels, anchors):
             cmd.pseudoatom(lab, pos=[float(v) for v in pos], label=text)
@@ -773,59 +1024,129 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
         report("%d label(s) placed, separated in the camera plane" % len(label_objs))
     cmd.deselect()
 
-    # ---- the classification scene gets the two enzymes PULLED APART.
-    #
-    # They are painted alike by design and the reference placement puts them
-    # 3.4 A apart, so in the shared frame they fuse into one mass and no
-    # class can be traced to an enzyme. Nothing in a classification depends
-    # on the relative pose, so this scene -- and only this scene -- separates
-    # them. The scene message says so, so it cannot be mistaken for a pose.
-    split_objs = []
-    if frame is not None:
-        gap = 0.0
-        for obj in (up_obj, dn_obj):
-            proj = cmd.get_coords("%s and polymer" % obj) @ cam_x
-            gap = max(gap, float(proj.max() - proj.min()))
-        for obj, sign in ((up_obj, -1.0), (dn_obj, 1.0)):
-            twin = obj + "_split"
-            cmd.create(twin, obj)
-            shift = cam_x * sign * gap * 0.32
-            m = np.eye(4)
-            m[:3, 3] = shift
-            cmd.transform_object(twin, [float(v) for v in m.flatten()])
-            split_objs.append(twin)
-        info["objects"].append(
-            "%s (classification, pulled %.0f A apart so the two enzymes can be "
-            "told apart; NOT a pose)" % (" + ".join(split_objs), gap * 0.64))
+    # The earlier "pull the two enzymes apart" workaround is gone. It existed
+    # because both enzymes were painted alike on one surface each and could not
+    # be told apart; now every class is its own object, named per enzyme
+    # (GDH_channel, FNR_channel, ...), so they are distinguishable and
+    # individually switchable without moving anything.
 
     # ---- scenes
+    # Orthographic. Set as a SETTING as well as in the view numbers: zoom()
+    # rewrites the view, and a figure comparing patches should not render a
+    # near patch larger than an equal far one. It also makes the label lift
+    # free -- under this camera, moving a label along the view axis does not
+    # move it on screen at all, so it clears the surface without sliding away
+    # from the patch it names.
+    cmd.set("orthoscopic", 1)
     cmd.zoom("%s or %s" % (up_obj, dn_obj), buffer=8, complete=1)
     cmd.clip("slab", 3000)   # zoom keeps the rotation set above and fits the pair
-    proteins = [up_obj, dn_obj]
-    neutral = [plain["up"], plain["dn"]]
+    # up_obj / dn_obj are no longer drawn themselves: every visible element is
+    # its own object (one per class, one per patch, ligands, mouths, tunnels,
+    # envelopes), so any of them can be switched off independently.
+    objs.base[:] = [base["up"], base["dn"]]
     note = placement.describe() if placement is not None else ""
+    ic_objs = objs.annotation
+    if placement is not None and "up" in exits and "dn" in exits and "p1" in arms:
+        # The SAME annotation the pose sessions carry, from the same
+        # function -- not a second copy. The reference placement is a real
+        # iMARS geometry (O_IC held at 180, D_IC raised from its minimum
+        # until nothing clashes), so the line, the arm, the arc and the
+        # labels all mean here exactly what they mean there, and carry the
+        # same object names. At O_IC 180 the three points are collinear and
+        # build_annotation omits the arc rather than inventing a bend.
+        #
+        # Built, then left OFF: the map's subject is the epitopes, and these
+        # numbers describe the placement rather than any patch.
+        from .annotation import build_annotation
+
+        objs.annotation[:] = build_annotation(
+            cmd,
+            {"p1": arms["p1"], "p2": exits["up"], "p3": exits["dn"],
+             "d_ic": placement.d_ic, "o_ic": placement.o_ic, "do": placement.do},
+            label="reference placement", frame=frame)
+        # Black, and pushed clear of both enzymes along the camera's up axis,
+        # exactly as the pose session does it -- measured from the drawn
+        # extent rather than a fixed offset, so no label lands on a protein
+        # whatever the pose or the zoom.
+        if frame is not None:
+            body = cmd.get_coords("%s or %s" % (up_obj, dn_obj))
+            if body is not None and len(body):
+                up_v = np.asarray(frame.up, float)
+                mid = (np.asarray(exits["up"], float)
+                       + np.asarray(exits["dn"], float)) / 2.0
+                reach = (body - mid) @ up_v
+                for nm, sign, step in (("IC_label_O", 1.0, 0.0),
+                                       ("IC_label_D", 1.0, -5.0),
+                                       ("IC_label_DO", -1.0, 0.0),
+                                       ("IC_label_tag", -1.0, 5.0)):
+                    if nm not in cmd.get_names("objects"):
+                        continue
+                    far = (float(reach.max()) + 6.0 if sign > 0
+                           else float(reach.min()) - 6.0)
+                    pos = mid + up_v * (far + sign * step)
+                    cmd.alter_state(1, nm, "(x, y, z) = (%f, %f, %f)"
+                                    % tuple(float(v) for v in pos))
+                cmd.set_color("c_black", [0.0, 0.0, 0.0])
+                for nm in ic_objs:
+                    if nm.startswith("IC_label"):
+                        cmd.set("label_color", "c_black", nm)
+                        cmd.set("label_size", 20, nm)
+        info["objects"].append(
+            "IC annotation (%s), shown in both scenes: D_IC %.1f A at "
+            "O_IC %.0f deg, DO %.4f. At 180 the arc's plane is undefined, so "
+            "it is drawn as a half turn in the VIEW plane -- a presentational "
+            "choice, not a measurement"
+            % (", ".join(ic_objs), placement.d_ic, placement.o_ic, placement.do))
+
+    # Labels and the iMARS annotation are BUILT but start off: they are in
+    # the session for anyone who wants them, and out of the way by default.
+    # ONE scene (user, 2026-10-25). `map`, `classes` and `envelopes` were
+    # the same object set with different things switched on, and that is a
+    # toggle, not a scene -- the same reason the `patches` scene went. What a
+    # scene really stores that an object cannot is the CAMERA, and there is
+    # one camera here.
+    # ---- the assembly: the SAME pair, copied onto every other protomer.
+    # Every object is replicated -- classes, patches, ligands, tunnels,
+    # mouths and the binder envelopes -- so the two scenes differ only in
+    # how many copies they show, which is what makes them comparable.
+    copies: List[str] = []
+    for ch, R, t in symmetry:
+        mat = _pymol_matrix(R, t)
+        for src in (objs.base + objs.classes + objs.patches + objs.tunnels
+                    + objs.mouths + objs.ligands + objs.envelopes):
+            dup = "%s_%s" % (src, ch)
+            cmd.create(dup, src)
+            cmd.transform_object(dup, mat)
+            copies.append(dup)
+    if copies:
+        info["objects"].append(
+            "assembly: %d object(s) copied onto %d further protomer(s) (%s)"
+            % (len(copies), len(symmetry), ", ".join(c for c, _, _ in symmetry)))
+
+    # Two scenes, and the ASSEMBLY one is stored last so the session opens
+    # on it: its job is to show where binders would sit on every protomer at
+    # once, and whether neighbouring ones collide -- which is a question
+    # about the assembly, not about one pair.
+    pair = objs.scene(envelopes=True, labels=True) + objs.annotation
     scenes = {
-        # the whole story, on the neutral surface so the patches lead
-        "map": neutral + tunnel_objs + mouth_objs + label_objs + env_objs,
-        # the classification alone -- no patches over it, and the two enzymes
-        # separated so each one's classes can be read
-        "classes": (split_objs or proteins),
-        # the epitopes on a NEUTRAL surface, labelled: the scene for judging
-        # which patches to carry into the sampling, with nothing competing
-        "patches": neutral + tunnel_objs + mouth_objs + label_objs,
-        # can a minimum binder sit on each of them, again on neutral
-        "envelopes": neutral + env_objs + label_objs,
+        "classes_pair": pair,
+        "classes_assembly": pair + copies,
     }
+    if ic_objs:
+        info["objects"].append(
+            "both scenes carry the annotation and the labels, in black and "
+            "clear of the complexes")
     for key, objs in scenes.items():
         cmd.disable("all")
         for o in objs:
             cmd.enable(o)
-        cmd.scene(key, "store", message=note if key == "map" else None)
+        cmd.scene(key, "store", message=note)
         info["objects"].append("scene %-10s %d object(s)" % (key, len(objs)))
+    opening = next(iter(scenes))
     cmd.disable("all")
-    for o in scenes["map"]:
+    for o in scenes[opening]:
         cmd.enable(o)
-    cmd.scene("map", "recall")
+    cmd.scene(opening, "recall")
     out_dir = os.path.dirname(os.path.abspath(out_pse))
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
@@ -879,8 +1200,8 @@ def main(argv=None) -> int:
         d_step=float(args.get("d_step", 1.0)),
         clash_cut=float(args.get("clash_cut", 3.0)),
         oic_arm=float(args.get("oic_arm", 1.0)),
-        up_name=args.get("up_name", "up"),
-        dn_name=args.get("dn_name", "dn"),
+        up_name=args.get("up_name", "Eup"),
+        dn_name=args.get("dn_name", "Edn"),
         up_chains=_chains(args.get("up_chains")),
         dn_chains=_chains(args.get("dn_chains")),
         classes_up=args.get("classes_up"),
@@ -976,36 +1297,66 @@ def selftest() -> int:
               "both tunnels are objects")
         check("E1_mouth" in objs, "the mouth is its own object")
 
-        # the patches are coloured ON the enzyme, not built as separate
-        # surfaces -- the bug that made the first version unreadable
-        check("E1_patch_01" not in objs,
-              "a patch is a selection, not a floating surface object")
-        check("E1_patch_01" in set(cmd.get_names("selections")),
-              "...but it is still selectable by name")
+        # every element is its own OBJECT, so any of them can be switched off
+        check("E1_patch_01" in objs, "each patch is its own object")
+        check(any(o.endswith("_channel") or o.endswith("_allowed") for o in objs),
+              "each residue class is its own object (%s)"
+              % sorted(o for o in objs if o.startswith("E1_"))[:4])
         check("E1_patch_01_binder" in objs, "every patch gets an envelope")
         check(len(info["envelopes"]) == 3, "three envelopes (%d)" % len(info["envelopes"]))
         blobs = {k: v["blobs"] for k, v in info["envelopes"].items()}
         check(set(blobs.values()) == {4},
               "a 6 A binder at 2 A steps is 4 blobs everywhere (%s)" % blobs)
 
-        for key in ("map", "classes", "patches", "envelopes"):
-            check(key in (cmd.get_scene_list() or []), "scene %s stored" % key)
-        cmd.scene("classes", "recall")
+        # ONE scene. `map`, `patches` and `envelopes` were this one with
+        # different objects switched on, which is a toggle, not a scene.
+        # What a scene stores that an object cannot is the camera, and there
+        # is one camera here.
+        stored = cmd.get_scene_list() or []
+        check(stored == ["classes_pair", "classes_assembly"],
+              "classes_pair then classes_assembly, as in the pose session (%s)"
+              % stored)
+        cmd.scene("classes_pair", "recall")
         on = set(cmd.get_names("objects", enabled_only=1))
-        check(not any(o.endswith("_binder") for o in on),
-              "the classes scene drops the envelopes (%s)" % sorted(on))
-        check(all(o.endswith("_split") for o in on),
-              "the classes scene shows the pulled-apart pair (%s)" % sorted(on))
-        # the tunnels were built on the un-split objects, so showing them here
-        # would draw each channel offset from the enzyme it belongs to
-        check("E1_tunnel" not in on,
-              "...and drops the tunnels, which no longer line up with it")
-        cmd.scene("envelopes", "recall")
-        on = set(cmd.get_names("objects", enabled_only=1))
-        check(any(o.endswith("_binder") for o in on), "the envelopes scene shows envelopes")
+        check(any(o.endswith("_binder") for o in on),
+              "the pair scene carries its envelopes (%s)" % sorted(on))
+        # The patches now ride ALONG with the classification (user,
+        # 2026-10-25): an epitope only means something read against the
+        # classes it sits on, and keeping them in separate scenes forced you
+        # to answer that by flicking between the two.
+        check(any("patch" in o for o in on),
+              "the classes scene carries the patches too, so an epitope can "
+              "be read against the classes under it")
+        check(any(o.endswith("_base") for o in on),
+              "...over the translucent whole-enzyme base")
+        check("E1_tunnel" in on and "E1_mouth" in on,
+              "...and keeps tunnels and mouths, which are objects too")
+        check(sum(1 for o in on if o.startswith("E1_") and "_" in o) >= 3,
+              "several class objects are shown (%s)" % sorted(on))
+        cmd.scene("classes_pair", "recall")
+        pair_on = set(cmd.get_names("objects", enabled_only=1))
+        cmd.scene("classes_assembly", "recall")
+        asm_on = set(cmd.get_names("objects", enabled_only=1))
+        check(any(o.endswith("_binder") for o in pair_on),
+              "the PAIR scene already carries the binder envelopes")
+        check(pair_on <= asm_on,
+              "the assembly shows everything the pair does, and more")
+        check(all(o.startswith("IC_") for o in pair_on
+                  if o.startswith("IC_")),
+              "the annotation is in both")
+        every = cmd.get_names("objects")
+        check(any(o.startswith("IC_") for o in every),
+              "the iMARS annotation exists as objects too (%s)"
+              % sorted(o for o in every if o.startswith("IC_")))
+        check(any(o.startswith("IC_") for o in asm_on),
+              "...and is SHOWN, not hidden: the user asked for the numbers")
 
         t = float(cmd.get("transparency", "E1"))
-        check(0.0 < t < 1.0, "the enzymes are translucent, so ligands show (%s)" % t)
+        # Solid, on purpose. This session is made to be toggled: you switch a
+        # patch off and on to see which surface it covers, and through a
+        # translucent surface you cannot tell the patch in front from the
+        # class behind it. Seeing inside is what hiding an object is for.
+        check(t == 0.0, "the enzymes are solid, so a toggled patch reads (%s)" % t)
         tt = float(cmd.get("sphere_transparency", "E1_tunnel"))
         check(tt < 0.3, "the tunnel is nearly opaque inside it (%s)" % tt)
         bt = float(cmd.get("sphere_transparency", "E1_patch_01_binder"))

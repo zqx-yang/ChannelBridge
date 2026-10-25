@@ -48,13 +48,10 @@ import numpy as np
 
 from .cut import (
     capsule_points,
-    cut_mask,
-    enzyme_section_point,
     parse_hotspot_residues,
     patch_centroid,
-    section_plane,
 )
-from .frame import Frame, angle_frame, pymol_view
+from .frame import Frame, angle_frame, clearest_roll, pymol_view
 from .select import parse_variant
 from .style import RAY_SETTINGS, RenderStyle, lighten
 
@@ -70,9 +67,15 @@ BASE_SCENES = ("occupancy", "base", "mask", "mouth", "footprint")
 #: Rasters an SVG is assembled on: the same frame as the matching render
 #: scene, but with the 3D channel and the 3D annotation off, because the SVG
 #: supplies both as vectors.
-SVG_BASE_SCENES = ("base_monomer", "base_multimer", "base_cs")
-#: Built per variant: render_monomer, cross_section_multimer, ...
-VARIANT_SCENES = ("render", "render_cs")
+SVG_BASE_SCENES = ("base_pair", "base_assembly")
+#: Helper scenes exist per variant because the assembly is framed on the whole
+#: assembly while the pair is framed on the focus pair. An SVG traces its
+#: overlay from these, so a helper rendered with the WRONG camera puts the
+#: channel outline and the D_IC/O_IC lines somewhere other than the proteins --
+#: which is exactly what happened to the first assembly SVG.
+HELPER_SCENES = ("mask", "mouth", "footprint")
+#: Built per variant: render_pair, render_assembly.
+VARIANT_SCENES = ("render",)
 SCENE_NAMES = BASE_SCENES + VARIANT_SCENES + SVG_BASE_SCENES
 
 
@@ -105,6 +108,8 @@ class SceneSpec:
         ligand_resn: Sequence[str] = (),
         style: Optional[RenderStyle] = None,
         oic_arm: float = 1.0,
+        oic_error_budget: Optional[float] = None,
+        roll_about: str = "arm",
         label: str = "",
         focus_chains: Sequence[str] = (),
         zoom: str = "complex",
@@ -117,13 +122,7 @@ class SceneSpec:
         patch_up: Optional[str] = None,
         patch_dn: Optional[str] = None,
         binder_radius: float = 11.0,
-        render: str = "monomer",
-        cross_section: str = "monomer",
-        xsec_offset: float = 0.0,
-        xsec_keep_min: float = 0.45,
-        xsec_keep_max: float = 0.75,
-        ghost_transparency: float = 0.85,
-        xsec_transparency: float = 0.10,
+        render: str = "pair",
         classes: bool = False,
         channel_ligand_up: Sequence[str] = (),
         channel_ligand_dn: Sequence[str] = (),
@@ -141,6 +140,15 @@ class SceneSpec:
         self.ligand_resn = [r for r in ligand_resn if r]
         self.style = style or RenderStyle()
         self.oic_arm = float(oic_arm)
+        #: None keeps the angle frame, where O_IC is drawn exactly true and
+        #: there is no freedom left. A number switches to the D_IC-line frame
+        #: and allows that many degrees of O_IC error in exchange for rolling
+        #: the channels off the line.
+        self.oic_error_budget = (None if oic_error_budget is None
+                                 else float(oic_error_budget))
+        #: Which axis the camera rolls about: "arm" keeps the O_IC arm on x
+        #: (the angle frame's convention), "line" keeps the D_IC line on x.
+        self.roll_about = str(roll_about)
         self.label = label
         # Only these chains are drawn, if given. A GDH tetramer plus eight
         # ligand chains is 15 transparent objects and cost 22 min of CPU for
@@ -153,7 +161,7 @@ class SceneSpec:
         # whole-complex view is no longer dominated by symmetry copies.
         self.zoom = zoom
         self.zoom_buffer = float(zoom_buffer)
-        # the full assembly with symmetry copies, for the multimer variants
+        # the full assembly with symmetry copies, for the assembly variants
         self.occupancy_pdb = occupancy_pdb
         # every protomer of each enzyme in the assembly. One binder per
         # upstream protomer, so the occupancy scene must show them ALL --
@@ -169,16 +177,6 @@ class SceneSpec:
         self.patch_dn = patch_dn
         self.binder_radius = float(binder_radius)
         self.render = parse_variant(render, "render")
-        self.cross_section = parse_variant(cross_section, "cross_section")
-        self.xsec_offset = float(xsec_offset)
-        # the band a section must leave standing: too little reads as a
-        # sliver, too much as an uncut enzyme
-        self.xsec_keep_min = float(xsec_keep_min)
-        self.xsec_keep_max = float(xsec_keep_max)
-        # p5d's values: the kept half nearly solid, the removed half a faint
-        # shell so the enzyme still reads as whole rather than sliced apart
-        self.ghost_transparency = float(ghost_transparency)
-        self.xsec_transparency = float(xsec_transparency)
         # The species that actually travels the channel, per enzyme. Only this
         # one is wrapped into the drawn volume: wrapping every cofactor would
         # paint red over prosthetic groups that the channel never reaches.
@@ -467,27 +465,82 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
     geom = None
     if "up" in tun and "dn" in tun:
         up_xyz = tun["up"][0]
+        dn_xyz = tun["dn"][0]
         p2 = up_xyz[-1]
         p1 = arc_point(up_xyz, spec.oic_arm)
-        p3 = tun["dn"][0][-1]
+        p3 = dn_xyz[-1]
+        # the downstream channel's OWN axis, the same arm length back along
+        # its chain. iMARS never uses it -- see o_ic_dn below -- but without
+        # it the figure cannot show which way the receiving mouth opens.
+        q1 = arc_point(dn_xyz, spec.oic_arm)
         d_ic = float(np.linalg.norm(p3 - p2))
         v1, v3 = p1 - p2, p3 - p2
         cosv = float(np.dot(v1, v3) / (np.linalg.norm(v1) * np.linalg.norm(v3)))
         o_ic = float(np.degrees(np.arccos(max(-1.0, min(1.0, cosv)))))
+        # The MIRROR of O_IC, measured at the downstream exit. O_IC is
+        # one-sided: it asks only whether the DONOR channel is aimed at the
+        # acceptor's exit, and says nothing about which way the acceptor
+        # opens. A receiving mouth pointing 90 degrees sideways, or straight
+        # back into its own protein, scores exactly like one facing the
+        # donor. On the p6a GDH-FNR pose: O_IC 165 deg, this 90 deg.
+        # Reported, never scored -- DO's published coefficients cover D_IC
+        # and O_IC only, and adding a term here would not be iMARS.
+        w1, w3 = q1 - p3, p2 - p3
+        cosw = float(np.dot(w1, w3) / (np.linalg.norm(w1) * np.linalg.norm(w3)))
+        o_ic_dn = float(np.degrees(np.arccos(max(-1.0, min(1.0, cosw)))))
         from ..geometry import do_score
         geom = {"d_ic": d_ic, "o_ic": o_ic, "do": do_score(d_ic, o_ic),
-                "p1": p1, "p2": p2, "p3": p3}
+                "o_ic_dn": o_ic_dn, "p1": p1, "p2": p2, "p3": p3, "q1": q1}
         report["geometry"] = {k: round(v, 4) for k, v in
-                              (("d_ic", d_ic), ("o_ic", o_ic), ("do", geom["do"]))}
+                              (("d_ic", d_ic), ("o_ic", o_ic), ("do", geom["do"]),
+                               ("o_ic_downstream_not_scored", o_ic_dn))}
 
     # ---- camera: the angle frame, else whatever PyMOL fitted
     if frame is None and geom is not None:
+        centre = np.asarray(cmd.get_extent("cplx")).mean(axis=0)
         try:
-            frame = angle_frame(geom["p1"], geom["p2"], geom["p3"],
-                                centre=np.asarray(cmd.get_extent("cplx")).mean(axis=0))
+            if spec.oic_error_budget is not None:
+                # Roll the camera until the drawn channels stop lying
+                # across the D_IC line. The axis is the O_IC ARM by default,
+                # so the arm stays on x exactly as in the angle frame and
+                # roll 0 is that frame. Costs some O_IC fidelity, capped by
+                # the budget and REPORTED either way -- an angle a reader
+                # cannot measure off the figure must not be presented as if
+                # they could.
+                pts = [cmd.get_coords(n) for n in ("tunnel_up", "tunnel_dn")
+                       if n in cmd.get_names("objects")]
+                pts = np.vstack(pts) if pts else np.zeros((0, 3))
+                roll, frame, clear, shown, true, frac = clearest_roll(
+                    geom["p1"], geom["p2"], geom["p3"], pts,
+                    about=spec.roll_about,
+                    max_angle_error=spec.oic_error_budget, step=5.0,
+                    centre=centre)
+                geom["oic_drawn"] = shown
+                report["frame"] = {
+                    "mode": "roll about the %s" % spec.roll_about,
+                    "roll_deg": round(roll, 1),
+                    "clearance_A": round(clear, 2),
+                    "o_ic_true": round(true, 1), "o_ic_drawn": round(shown, 1),
+                    "o_ic_error": round(abs(shown - true), 1),
+                    "d_ic_drawn_pct": round(100 * frac, 1)}
+            else:
+                frame = angle_frame(geom["p1"], geom["p2"], geom["p3"],
+                                    centre=centre)
+                report["frame"] = {"mode": "angle", "o_ic_drawn": "true"}
         except ValueError as exc:
             report["frame_warning"] = str(exc)
             frame = None
+    if frame is not None and geom is not None:
+        # The projected P2->P1 direction, for the SVG's angle marker. Under
+        # the angle frame it can be derived from the reported O_IC; under a
+        # rolled frame it cannot, and assuming it would draw the arm at an
+        # angle the picture does not contain.
+        arm = np.asarray(geom["p1"], float) - np.asarray(geom["p2"], float)
+        ax = float(arm @ frame.axes[0])
+        ay = -float(arm @ frame.axes[1])        # image y grows downward
+        n = float(np.hypot(ax, ay))
+        if n > 1e-9:
+            report["axis_px"] = [round(ax / n, 6), round(ay / n, 6)]
     zoom_sel = "cplx"
     if spec.zoom == "channel" and tun:
         names = [n for n in ("tunnel_up", "tunnel_dn") if n in cmd.get_names("objects")]
@@ -527,31 +580,40 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
         "mask": [n for n in helpers if n.startswith("mask_")],
         "mouth": [n for n in helpers if n.startswith("mouth_")],
         "footprint": [n for n in helpers if n.startswith("footprint")],
+        # the same three again, to be stored with the assembly's camera
+        "mask_assembly": [n for n in helpers if n.startswith("mask_")],
+        "mouth_assembly": [n for n in helpers if n.startswith("mouth_")],
+        "footprint_assembly": [n for n in helpers if n.startswith("footprint")],
     }
-    # render / cross_section, per requested variant
-    multi_view = None
-    variants = {"monomer": ("cplx", ""), "multimer": ("cplx_multi", "_multi")}
-    for base_name, want in (("render", spec.render), ("render_cs", spec.cross_section)):
+    # render, per requested variant
+    assembly_view = None
+    variants = {"pair": ("cplx", ""), "assembly": ("cplx_assembly", "_assembly")}
+    # The cross-section was dropped (user, 2026-10-25): it was not meaningfully
+    # different from render_pair, and the cut copy coloured parts of the FNR
+    # ligand black. render_pair shows the tunnels and the relative positions,
+    # which is what the scene was for. Its builder went with it; the cutting
+    # geometry stays in render/cut.py, which is tested on its own.
+    for base_name, want in (("render", spec.render),):
         if want == "none":
             continue
-        which = ("monomer", "multimer") if want == "both" else (want,)
+        which = ("pair", "assembly") if want == "both" else (want,)
         for v in which:
-            src, sfx = variants[v]
+            src, _sfx = variants[v]
             if src not in cmd.get_names("objects"):
                 report.setdefault("warnings", []).append(
-                    "%s_%s skipped: no %s object (give occupancy= for the multimer)"
+                    "%s_%s skipped: no %s object (give occupancy= for the assembly)"
                     % (base_name, v, src))
                 continue
             key = base_name if want != "both" else "%s_%s" % (base_name, v)
-            if v == "multimer" and src in cmd.get_names("objects"):
+            if v == "assembly" and src in cmd.get_names("objects"):
                 # The assembly is far bigger than the focus pair, so the pair's
-                # zoom clips it: the first multimer SVG came out with protomers
+                # zoom clips it: the first assembly SVG came out with protomers
                 # cut off at the frame edge. Re-fit to the assembly, keeping
-                # the rotation, and store that view with the multimer scenes.
+                # the rotation, and store that view with the assembly scenes.
                 cmd.set_view(view)
                 cmd.zoom(src, buffer=6, complete=1)
                 cmd.clip("slab", 3000)
-                multi_view = cmd.get_view()
+                assembly_view = cmd.get_view()
             if base_name == "render":
                 sets[key] = [src + "_il", *tunnels, *ann]
                 # The same frame WITHOUT the 3D channel and annotation. This
@@ -561,11 +623,7 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
                 # label twice and a red smear where the 3D tunnel reaches into
                 # solvent.
                 sets["base_" + v] = [src + "_il"]
-            else:
-                sets[key] = _cross_section(cmd, spec, st, frame, geom, report,
-                                           source=src, suffix=sfx) + tunnels + ann
-                sets["base_cs"] = [o for o in sets[key]
-                                   if o not in tunnels and o not in ann]
+
 
     for name in list(sets):
         objs = [o for o in sets.get(name, []) if o in cmd.get_names("objects")]
@@ -574,11 +632,15 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
         cmd.disable("all")
         for o in objs:
             cmd.enable(o)
-        cmd.set_view(multi_view if ("multimer" in name and multi_view) else view)
+        # every *_assembly scene -- base, render AND the helpers an SVG traces
+        # from -- must share the assembly camera, or the vector overlay lands
+        # in a different place from the raster it is drawn over
+        use_assembly = assembly_view and ("assembly" in name or name.endswith("_assembly"))
+        cmd.set_view(assembly_view if use_assembly else view)
         cmd.scene(name, "store", _scene_note(name))
         report["scenes"].append("%s (%s)" % (name, ", ".join(objs)))
 
-    first = next((s for s in ("render", "render_monomer", "classes", "base")
+    first = next((s for s in ("render", "render_pair", "classes", "base")
                   if s in cmd.get_scene_list()), None)
     if first:
         cmd.scene(first, "recall")
@@ -597,9 +659,8 @@ def _scene_note(name):
         "mask": "tunnel volumes, flat black -> silhouette",
         "mouth": "exit markers, upstream black / downstream grey",
         "footprint": "both enzymes, flat black -> the no-draw boundary",
-        "base_monomer": "proteins and ligands only -- the raster an SVG is built on",
-        "base_multimer": "the assembly, proteins and ligands only -- SVG raster",
-        "base_cs": "the cross-section, proteins only -- SVG raster",
+        "base_pair": "proteins and ligands only -- the raster an SVG is built on",
+        "base_assembly": "the assembly, proteins and ligands only -- SVG raster",
     }.get(name, name)
 
 
@@ -735,9 +796,9 @@ def _occupancy(cmd, spec, st, report):
     """The assembly, plus the binder envelope the pose stage tested."""
     made = []
     if spec.occupancy_pdb and os.path.isfile(spec.occupancy_pdb):
-        cmd.load(spec.occupancy_pdb, "cplx_multi")
-        cmd.hide("everything", "cplx_multi")
-        cmd.show("surface", "cplx_multi and polymer")
+        cmd.load(spec.occupancy_pdb, "cplx_assembly")
+        cmd.hide("everything", "cplx_assembly")
+        cmd.show("surface", "cplx_assembly and polymer")
         # Every protomer gets ITS OWN ENZYME'S colour, in a different shade,
         # rather than a uniform grey for "the copies". Grey copies read as a
         # different species and, worse, a grey copy sitting in front of the
@@ -749,41 +810,51 @@ def _occupancy(cmd, spec, st, report):
             if not chains:
                 continue
             base = st.palette.rgb(role)
-            # the first chain is the one the pose was built on: full colour,
-            # the rest progressively paler
+            # The first chain is the one the pose was built on: full colour.
+            # Every OTHER protomer of that enzyme gets ONE shared lighter
+            # shade of the same hue -- not a per-copy gradient. A gradient
+            # said something the figure does not mean (the copies are not
+            # ordered, and copy 4 is no further from the pose than copy 2),
+            # and at the pale end of it the fourth upstream and fourth
+            # downstream protomer both washed out to near-white and stopped
+            # being tellable apart. One step keeps every copy in its own
+            # enzyme's hue and clearly behind the protomer that matters.
+            pale = lighten(base, st.copy_lighten)
+            cmd.set_color("c_%s_copy" % role, [float(c) for c in pale])
             for i, ch in enumerate(chains):
-                sel = "cplx_multi and chain %s and polymer" % ch
+                sel = "cplx_assembly and chain %s and polymer" % ch
                 if cmd.count_atoms(sel) == 0:
                     continue
-                shade = lighten(base, 0.0 if i == 0 else
-                                min(0.72, 0.18 + 0.18 * i))
-                key = "c_%s_%s" % (role, ch.lower())
-                cmd.set_color(key, [float(c) for c in shade])
+                if i == 0:
+                    key = "c_%s_%s" % (role, ch.lower())
+                    cmd.set_color(key, [float(c) for c in base])
+                else:
+                    key = "c_%s_copy" % role
                 cmd.color(key, sel)
             report["objects"].append(
-                "cplx_multi %sstream protomers %s in shades of %s"
-                % (which, "+".join(chains), role))
+                "cplx_assembly %sstream: %s full colour, %s one lighter shade"
+                % (which, chains[0], "+".join(chains[1:]) or "(none)"))
         if spec.ligand_resn:
             # the assembly carries its cofactors too; without this the
-            # multimer render loses every ligand the monomer render shows
-            lig_sel = "cplx_multi and (%s)" % spec.ligand_sel
+            # assembly render loses every ligand the pair render shows
+            lig_sel = "cplx_assembly and (%s)" % spec.ligand_sel
             if cmd.count_atoms(lig_sel):
                 cmd.set_color("c_ligand", [float(c) for c in st.palette.rgb("ligand")])
                 cmd.color("c_ligand", lig_sel)
                 cmd.show("sticks", lig_sel)
                 report["objects"].append(
-                    "cplx_multi ligands (%d atoms, sticks)" % cmd.count_atoms(lig_sel))
+                    "cplx_assembly ligands (%d atoms, sticks)" % cmd.count_atoms(lig_sel))
         cmd.set("transparency", st.transparency_for("inspect"),
-                "cplx_multi and polymer")                        # the inspection copy
-        cmd.create("cplx_multi_il", "cplx_multi")
-        cmd.set("transparency", st.transparency_for("copy"), "cplx_multi_il and polymer")
-        made.append("cplx_multi")
-        report["objects"].append("cplx_multi (%d atoms)" % cmd.count_atoms("cplx_multi"))
+                "cplx_assembly and polymer")                        # the inspection copy
+        cmd.create("cplx_assembly_il", "cplx_assembly")
+        cmd.set("transparency", st.transparency_for("copy"), "cplx_assembly_il and polymer")
+        made.append("cplx_assembly")
+        report["objects"].append("cplx_assembly (%d atoms)" % cmd.count_atoms("cplx_assembly"))
 
     # One binder per upstream protomer. Each is paired with the NEAREST
     # downstream copy rather than by chain order, because the assembly's
     # chain naming does not have to follow the pairing the pose implies.
-    src = "cplx_multi" if "cplx_multi" in cmd.get_names("objects") else "cplx"
+    src = "cplx_assembly" if "cplx_assembly" in cmd.get_names("objects") else "cplx"
     patches_up = read_hotspot_patches(spec.hotspots_up)
     patches_dn = read_hotspot_patches(spec.hotspots_dn)
     resi_up = patches_up.get(str(spec.patch_up)) if spec.patch_up else None
@@ -832,184 +903,12 @@ def _occupancy(cmd, spec, st, report):
     return made
 
 
-def _cross_section(cmd, spec, st, frame, geom, report, source="cplx", suffix=""):
-    """iMARS Fig 2C: each enzyme cut open, with the removed half left faint.
-
-    Two objects per enzyme. The CUT copy has the camera-side atoms deleted and
-    is drawn solid, so the section face reads as a solid surface. The GHOST
-    keeps every atom at high transparency, so the enzyme still looks whole
-    rather than sliced into pieces -- which is the whole point of drawing both.
-
-    The ghost's transparency is the figure's most delicate number. p5d used
-    0.85; at that value, next to a solid cut face, the removed half is so
-    faint that the section does not read as a section at all -- the enzyme
-    just looks uncut. 0.60 is the default here instead.
-
-    Atoms are deleted rather than clipped: a clipping plane also cuts the
-    tunnel spheres, leaving hollow rings or protein over the channel.
-    """
-    if geom is None or frame is None:
-        report.setdefault("warnings", []).append(
-            "cross_section%s skipped: needs both tunnels and a frame" % (suffix or ""))
-        return []
-    # the SHARED normal, so both enzymes are sectioned in the same plane
-    # orientation; the plane's position is then chosen per enzyme below.
-    _mid, normal = section_plane(geom["p2"], geom["p3"], frame.toward_viewer)
-    exits = {"up": geom["p2"], "dn": geom["p3"]}
-    made = []
-    for role, which in (("upstream", "up"), ("downstream", "dn")):
-        try:
-            chains = spec.chain_sel(which)
-        except ValueError:
-            continue
-        sel = "%s and %s and polymer" % (source, chains)
-        if cmd.count_atoms(sel) == 0:
-            continue
-        solid = "xsec_%s%s" % (which, suffix)
-        ghost = "ghost_%s%s" % (which, suffix)
-        cmd.create(solid, sel)
-        cmd.create(ghost, sel)   # trimmed to the COMPLEMENT below
-        m = cmd.get_model(solid)
-        xyz = np.array(m.get_coord_list())
-        # Each enzyme is cut at ITS OWN channel, not at the midpoint between
-        # the two. A single shared plane cuts them equally only if they lie
-        # at the same depth, and they do not: on this very pose the shared
-        # plane kept 1296/1971 of GDH but just 234/2352 of FNR.
-        point = enzyme_section_point(exits[which], xyz, normal,
-                                     spec.xsec_keep_min, spec.xsec_keep_max)
-        drop = cut_mask(xyz, point, normal, spec.xsec_offset)
-        idx = [a.index for a, k in zip(m.atom, drop) if k]
-        if idx:
-            # build the whole selection first: PyMOL renumbers index after a remove
-            cmd.select("_cut", "%s and index %s" % (solid, "+".join(str(i) for i in idx)))
-            cmd.remove("_cut")
-            cmd.delete("_cut")
-            # The ghost is the atoms the cut REMOVED -- the complement, not the
-            # whole enzyme. A ghost holding every atom redraws the kept half on
-            # top of the solid cut face and hides exactly what the section
-            # exists to show; p5d splits the enzyme into two complementary
-            # objects (481 + 1490 = 1971 atoms on its upstream enzyme) and that
-            # is why its cross-section reads as one.
-            keep_idx = [a.index for a, k in zip(m.atom, drop) if not k]
-            if keep_idx:
-                cmd.select("_keep", "%s and index %s"
-                           % (ghost, "+".join(str(i) for i in keep_idx)))
-                cmd.remove("_keep")
-                cmd.delete("_keep")
-        for nm, tr in ((solid, spec.xsec_transparency), (ghost, spec.ghost_transparency)):
-            cmd.hide("everything", nm)
-            cmd.show("surface", nm)
-            cmd.set_color("c_" + role, [float(c) for c in st.palette.rgb(role)])
-            cmd.color("c_" + role, nm)
-            cmd.set("transparency", tr, nm)
-        made += [solid, ghost]
-        kept = len(xyz) - len(idx)
-        report["objects"].append(
-            "%s (%d of %d atoms kept, %.0f%%, transparency %.2f) + %s "
-            "(the %d removed atoms, %.0f%% transparent)"
-            % (solid, kept, len(xyz), 100.0 * kept / max(1, len(xyz)),
-               spec.xsec_transparency, ghost, len(xyz) - kept,
-               spec.ghost_transparency * 100))
-        if kept < 0.25 * len(xyz):
-            report.setdefault("warnings", []).append(
-                "%s keeps only %.0f%% of the enzyme; the section will read as a "
-                "sliver rather than a cut" % (solid, 100.0 * kept / max(1, len(xyz))))
-    # The cofactors, NOT cut. They are what the section exists to reveal -- the
-    # channel runs to them -- and they are small enough that cutting them
-    # leaves a meaningless fragment. The protein around them is already open.
-    if spec.ligand_resn:
-        lig = "xsec_ligands%s" % suffix
-        cmd.create(lig, "%s and (%s)" % (source, spec.ligand_sel))
-        if cmd.count_atoms(lig):
-            cmd.hide("everything", lig)
-            cmd.show("sticks", lig)
-            cmd.set_color("c_ligand", [float(c) for c in st.palette.rgb("ligand")])
-            cmd.color("c_ligand", lig)
-            cmd.set("stick_radius", st.stick_radius, lig)
-            made.append(lig)
-            report["objects"].append("%s (%d atoms, uncut)" % (lig, cmd.count_atoms(lig)))
-        else:
-            cmd.delete(lig)
-    return made
-
-
 def _annotation(cmd, geom, st, label, frame=None):
-    """Dashed D_IC line, the O_IC arm arrow, the angle arc and the labels."""
-    from pymol.cgo import CONE, CYLINDER
+    """Kept as a thin alias: the drawing lives in render/annotation.py now,
+    because the hotspot map draws the same thing and had grown its own copy."""
+    from .annotation import build_annotation
 
-    rgb = [float(c) for c in st.palette.rgb("annotation")]
-    p1, p2, p3 = geom["p1"], geom["p2"], geom["p3"]
-    made = []
-
-    cmd.delete("IC_mouths")
-    for p in (p2, p3):
-        cmd.pseudoatom("IC_mouths", pos=[float(p[0]), float(p[1]), float(p[2])], vdw=0.7)
-    cmd.hide("everything", "IC_mouths")
-    cmd.show("spheres", "IC_mouths")
-    cmd.set_color("c_ann", rgb)
-    cmd.color("c_ann", "IC_mouths")
-    made.append("IC_mouths")
-
-    cmd.distance("IC_line", "IC_mouths and index 1", "IC_mouths and index 2")
-    cmd.hide("labels", "IC_line")
-    for k, v in (("dash_gap", 0.35), ("dash_length", 0.5), ("dash_radius", 0.14)):
-        cmd.set(k, v, "IC_line")
-    cmd.color("c_ann", "IC_line")
-    made.append("IC_line")
-
-    # segment X: the O_IC arm, as an arrow ending at the upstream exit P2
-    d = (p1 - p2) / float(np.linalg.norm(p1 - p2))
-    tail, neck = p2 + d * 7.0, p2 + d * 2.4
-    cmd.load_cgo([CYLINDER, *tail, *neck, 0.22, *rgb, *rgb,
-                  CONE, *neck, *p2, 0.55, 0.0, *rgb, *rgb, 1.0, 1.0], "IC_arm")
-    made.append("IC_arm")
-
-    # the O_IC arc at P2, slerped between the two arms
-    u1 = (p1 - p2) / np.linalg.norm(p1 - p2)
-    u3 = (p3 - p2) / np.linalg.norm(p3 - p2)
-    phi = float(np.arccos(max(-1.0, min(1.0, float(u1 @ u3)))))
-    if phi > 1e-3:
-        pts = [p2 + 6.0 * (np.sin((1 - t) * phi) * u1 + np.sin(t * phi) * u3) / np.sin(phi)
-               for t in np.linspace(0, 1, 40)]
-        cgo = []
-        for a, b in zip(pts[:-1], pts[1:]):
-            cgo += [CYLINDER, *a, *b, 0.16, *rgb, *rgb]
-        cmd.load_cgo(cgo, "IC_angle")
-        made.append("IC_angle")
-
-    # labels, offset perpendicular to the line in the view plane. PyMOL labels
-    # cannot do subscripts, so they read DIC / OIC / DO; the SVG writes the
-    # real subscripts.
-    # Offsets must separate the labels ON SCREEN. A world axis projected off
-    # the line does not: the first preview stacked all four labels in one
-    # illegible pile. Use the camera's own up vector when a frame is known.
-    mid = (p2 + p3) / 2.0
-    ln = (p3 - p2) / float(np.linalg.norm(p3 - p2))
-    if frame is not None:
-        up = np.asarray(frame.up, float)
-    else:
-        up = np.array([0.0, 0.0, 1.0])
-    up = up - (up @ ln) * ln
-    if float(np.linalg.norm(up)) < 1e-6:
-        up = np.cross(ln, [1.0, 0.0, 0.0])
-    up = up / float(np.linalg.norm(up))
-    step = 6.0
-    texts = [("IC_label_D", mid + up * step, "DIC = %.1f A" % geom["d_ic"]),
-             ("IC_label_O", mid + up * 2 * step, "OIC = %.1f deg" % geom["o_ic"]),
-             ("IC_label_DO", mid - up * step, "DO = %.3f" % geom["do"])]
-    if label:
-        texts.append(("IC_label_tag", mid - up * 2 * step, label))
-    for name, pos, txt in texts:
-        cmd.pseudoatom(name, pos=[float(pos[0]), float(pos[1]), float(pos[2])])
-        cmd.hide("everything", name)
-        cmd.label(name, '"%s"' % txt)
-        made.append(name)
-    cmd.set("label_size", 14)
-    cmd.set("label_color", "black")
-    cmd.set("label_outline_color", "white")
-    cmd.set("float_labels", "on")
-    cmd.group("IC_annotation", " ".join(made))
-    return made
+    return build_annotation(cmd, geom, st, label, frame)
 
 
 def _helpers(cmd, spec, tun, st, drawn=None):
@@ -1085,6 +984,9 @@ def main(argv=None):
         dn_chains=args.get("dn_chains", "").split(","),
         ligand_resn=args.get("ligands", "").split(","),
         oic_arm=float(args.get("oic_arm", 1.0)),
+        oic_error_budget=(float(args["oic_error_budget"])
+                          if args.get("oic_error_budget") else None),
+        roll_about=args.get("roll_about", "arm"),
         label=args.get("label", ""),
         focus_chains=[c for c in args.get("focus_chains", "").split(",") if c],
         zoom=args.get("zoom", "complex"),
@@ -1097,13 +999,7 @@ def main(argv=None):
         patch_up=args.get("patch_up"),
         patch_dn=args.get("patch_dn"),
         binder_radius=float(args.get("binder_radius", 11.0)),
-        render=args.get("render", "monomer"),
-        cross_section=args.get("cross_section", "monomer"),
-        xsec_offset=float(args.get("xsec_offset", 0.0)),
-        xsec_keep_min=float(args.get("xsec_keep_min", 0.45)),
-        xsec_keep_max=float(args.get("xsec_keep_max", 0.75)),
-        ghost_transparency=float(args.get("ghost_transparency", 0.85)),
-        xsec_transparency=float(args.get("xsec_transparency", 0.10)),
+        render=args.get("render", "pair"),
         classes=str(args.get("classes", "")).lower() in ("1", "true", "yes"),
         channel_ligand_up=_csv(args.get("channel_ligand_up")),
         channel_ligand_dn=_csv(args.get("channel_ligand_dn")),
@@ -1195,7 +1091,7 @@ def selftest():
 
         names = cmd.get_scene_list()
         for s in ("occupancy", "base", "mask", "mouth", "footprint",
-                  "render", "render_cs"):
+                  "render"):
             check(s in names, "scene %r stored (have %s)" % (s, sorted(names)))
         check("classes" not in names,
               "a pose session carries no classification scene by default "
@@ -1216,26 +1112,8 @@ def selftest():
 
         # the cross-section must carry BOTH a solid cut copy and a faint ghost,
         # otherwise the enzymes look sliced into pieces
-        cmd.scene("render_cs", "recall")
-        on = set(cmd.get_names("objects", enabled_only=1))
-        check(any(o.startswith("xsec_") for o in on), "render_cs has a cut copy")
-        check(any(o.startswith("ghost_") for o in on), "render_cs keeps a ghost")
-        solid = next(o for o in on if o.startswith("xsec_"))
-        ghost = next(o for o in on if o.startswith("ghost_"))
-        # The cut copy and the ghost are COMPLEMENTARY halves of one enzyme:
-        # together they must account for every atom of it, and neither may be
-        # empty. The old assertion (solid < ghost) encoded the earlier design
-        # where the ghost held EVERY atom -- which is exactly what made it
-        # redraw the kept half over the cut face and hide the section.
-        which = "up" if solid.endswith("up") else "dn"
-        n_solid, n_ghost = cmd.count_atoms(solid), cmd.count_atoms(ghost)
-        n_whole = cmd.count_atoms("cplx and %s and polymer" % spec.chain_sel(which))
-        check(n_solid > 0 and n_ghost > 0,
-              "both halves of the section are non-empty (%d kept, %d removed)"
-              % (n_solid, n_ghost))
-        check(n_solid + n_ghost == n_whole,
-              "cut and ghost partition the enzyme (%d + %d = %d, enzyme has %d)"
-              % (n_solid, n_ghost, n_solid + n_ghost, n_whole))
+        check("render_cs" not in cmd.get_scene_list(),
+              "the cross-section scene is no longer built (dropped by the user)")
 
         # the inspection scenes must be LESS transparent than the render ones,
         # but not solid: a solid surface hides the cofactors
@@ -1278,10 +1156,10 @@ def selftest():
     print("[selftest] %s -- session written; tunnels kept as objects at CAVER radii "
           "and the drawn volume wraps the channelled ligand WITHOUT moving D_IC or "
           "O_IC; the angle frame built; scenes stored (occupancy, base, mask, mouth, "
-          "footprint, render, render_cs, base_*) each showing exactly the right "
+          "footprint, render, base_*) each showing exactly the right "
           "objects, and no classification scene unless asked for; inspection scenes "
-          "translucent but less so than the render scenes; the cross-section carries "
-          "a solid cut copy, a faint ghost and uncut ligands; one-sphere tunnel "
+          "translucent but less so than the render scenes; no cross-section "
+          "scene is built; one-sphere tunnel "
           "refused; fixed-length O_IC arm"
           % ("PASS" if ok else "FAIL"))
     return 0 if ok else 1

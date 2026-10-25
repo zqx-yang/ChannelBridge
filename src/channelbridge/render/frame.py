@@ -22,7 +22,7 @@ transformed: a figure must stay comparable with the PDB the pose stage wrote.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -91,6 +91,28 @@ def _unit(v, what):
     return v / n
 
 
+def _put_upstream_left(x, z, p1, p2, upstream_left: bool):
+    """Turn the frame 180 degrees about y unless the upstream BODY is left.
+
+    House rule: the upstream (green) enzyme is always on the left. Judged on
+    P1, not on the exits: P1 lies one arm inside the upstream channel, so it
+    points at that enzyme's body, while the two exits sit together at the
+    interface and say little about which protein is where.
+
+    Checked rather than assumed, because each frame builds x from a different
+    vector -- the O_IC arm points INTO the upstream protein, the D_IC line
+    points AWAY from it -- so a fixed "apply the flip" means opposite things
+    in the two, which is how ic_line_frame shipped mirrored.
+    """
+    if not upstream_left:
+        return x, z
+    p1 = np.asarray(p1, float).reshape(3)
+    p2 = np.asarray(p2, float).reshape(3)
+    if float((p1 - p2) @ x) > 0.0:          # the upstream body is to the right
+        return -x, -z
+    return x, z
+
+
 def angle_frame(p1, p2, p3, *, centre=None, upstream_left=True) -> Frame:
     """The ``rotated0`` angle frame from the iMARS construction.
 
@@ -123,12 +145,200 @@ def angle_frame(p1, p2, p3, *, centre=None, upstream_left=True) -> Frame:
     z = _unit(normal, "plane normal")
     y = np.cross(z, x)
 
-    if upstream_left:
-        # 180 degrees about the vertical: x -> -x, z -> -z, y unchanged.
-        x, z = -x, -z
+    # 180 degrees about the vertical if needed: x -> -x, z -> -z, y unchanged.
+    x, z = _put_upstream_left(x, z, p1, p2, upstream_left)
 
     c = np.asarray(p2 + p3, dtype=float) / 2.0 if centre is None else np.asarray(centre, float)
     return Frame(np.array([x, y, z]), c, name="rotated0")
+
+
+def ic_line_frame(p1, p2, p3, *, roll: float = 0.0, centre=None,
+                  upstream_left: bool = True) -> Frame:
+    """A frame with the **D_IC line along x**, rolled about it by *roll*.
+
+    ``angle_frame`` lays the O_IC ARM along x and holds the P1-P2-P3 plane
+    face-on, so O_IC is drawn at its true value. That is the right frame for
+    reading the angle, and it leaves no freedom at all: every other choice is
+    fixed. When a channel's drawn volume happens to lie across the D_IC line
+    in that view, there is nothing to be done about it.
+
+    This frame gives up one thing to buy that freedom. The line joining the
+    exits is the x axis, and the camera may roll about it by any angle; the
+    line stays horizontal at every roll, while the tunnels swing out of the
+    way. What is lost is the face-on plane, so O_IC is **foreshortened** --
+    use :func:`drawn_oic` to find out by how much, and pass the projected
+    arm to the SVG assembler as ``axis_px`` rather than letting it assume
+    the true angle.
+
+    How much foreshortening a given roll costs depends on the pose: near
+    O_IC 180 the arm is almost antiparallel to the line and barely moves,
+    near 90 it moves a lot. So the roll is chosen per pose against a stated
+    error budget, never fixed as a house constant.
+    """
+    p1 = np.asarray(p1, float).reshape(3)
+    p2 = np.asarray(p2, float).reshape(3)
+    p3 = np.asarray(p3, float).reshape(3)
+    x = _unit(p3 - p2, "P2->P3 (the D_IC line)")
+    seed = p1 - p2
+    seed = seed - float(seed @ x) * x
+    if float(np.linalg.norm(seed)) < 1e-6:
+        raise ValueError(
+            "P1, P2 and P3 are collinear (O_IC is 0 or 180 degrees), so there "
+            "is no in-plane direction to roll from. Use angle_frame()."
+        )
+    seed = _unit(seed, "in-plane perpendicular")
+    th = np.radians(float(roll))
+    y = _unit(np.cos(th) * seed + np.sin(th) * np.cross(x, seed), "camera y")
+    z = np.cross(x, y)
+    x, z = _put_upstream_left(x, z, p1, p2, upstream_left)
+    c = (p2 + p3) / 2.0 if centre is None else np.asarray(centre, float)
+    return Frame(np.array([x, y, z]), c, name="ic%+03d" % round(float(roll)))
+
+
+def arm_frame(p1, p2, p3, *, roll: float = 0.0, centre=None,
+              upstream_left: bool = True) -> Frame:
+    """``angle_frame`` with the camera free to roll about the **O_IC arm**.
+
+    x is P2->P1, the upstream channel's last two spheres, exactly as in
+    :func:`angle_frame`; at ``roll=0`` this IS that frame. Rolling turns the
+    camera about that arm, so the arm stays horizontal while the rest of the
+    picture -- the D_IC line, and the drawn channels -- swings.
+
+    The cost is larger than rolling about the D_IC line, and in a second
+    place: the line leaves the view plane, so **both** the drawn O_IC and the
+    drawn LENGTH of the D_IC line shrink. Report both (:func:`drawn_oic`,
+    :func:`drawn_dic_fraction`) and budget both.
+    """
+    p1 = np.asarray(p1, float).reshape(3)
+    p2 = np.asarray(p2, float).reshape(3)
+    p3 = np.asarray(p3, float).reshape(3)
+    x = _unit(p1 - p2, "P2->P1 (the O_IC arm)")
+    seed = p3 - p2
+    seed = seed - float(seed @ x) * x
+    if float(np.linalg.norm(seed)) < 1e-6:
+        raise ValueError(
+            "P1, P2 and P3 are collinear (O_IC is 0 or 180 degrees), so there "
+            "is no in-plane direction to roll from. Use angle_frame()."
+        )
+    seed = _unit(seed, "in-plane perpendicular")
+    th = np.radians(float(roll))
+    y = _unit(np.cos(th) * seed + np.sin(th) * np.cross(x, seed), "camera y")
+    z = np.cross(x, y)
+    x, z = _put_upstream_left(x, z, p1, p2, upstream_left)
+    c = (p2 + p3) / 2.0 if centre is None else np.asarray(centre, float)
+    return Frame(np.array([x, y, z]), c, name="arm%+03d" % round(float(roll)))
+
+
+def drawn_dic_fraction(frame: Frame, p2, p3) -> float:
+    """Drawn length of the D_IC line over its true length.
+
+    1.0 when the line lies in the view plane. Anything less means the figure
+    shows a shorter line than the number beside it: say so, or do not roll.
+    """
+    p2 = np.asarray(p2, float).reshape(3)
+    p3 = np.asarray(p3, float).reshape(3)
+    v = p3 - p2
+    n = float(np.linalg.norm(v))
+    if n < 1e-9:
+        return float("nan")
+    u = float(v @ frame.axes[0])
+    w = float(v @ frame.axes[1])
+    return float(np.hypot(u, w) / n)
+
+
+def drawn_oic(frame: Frame, p1, p2, p3) -> float:
+    """The O_IC a viewer would measure off this frame, in degrees.
+
+    Equal to the true O_IC only when the P1-P2-P3 plane is face-on. Report it
+    beside the true value whenever they differ: a figure whose angle cannot
+    be measured off it, without saying so, is worse than one that does not
+    draw the angle at all.
+    """
+    p1 = np.asarray(p1, float).reshape(3)
+    p2 = np.asarray(p2, float).reshape(3)
+    p3 = np.asarray(p3, float).reshape(3)
+    x, y = frame.axes[0], frame.axes[1]
+    a = np.array([float((p1 - p2) @ x), float((p1 - p2) @ y)])
+    b = np.array([float((p3 - p2) @ x), float((p3 - p2) @ y)])
+    na, nb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+    if na < 1e-9 or nb < 1e-9:
+        return float("nan")
+    return float(np.degrees(np.arccos(np.clip(a @ b / (na * nb), -1.0, 1.0))))
+
+
+def clearest_roll(p1, p2, p3, points, *, about: str = "arm",
+                  max_angle_error: float = 2.0, min_dic_fraction: float = 0.95,
+                  step: float = 15.0, band: Tuple[float, float] = (0.12, 0.88),
+                  centre=None, upstream_left: bool = True):
+    """Pick the roll that keeps *points* furthest off the drawn D_IC line.
+
+    ``about`` is the axis the camera rolls around:
+
+    ``"arm"``
+        the O_IC arm stays on x, as in :func:`angle_frame`, of which roll 0
+        is exactly a copy. The D_IC line leaves the view plane, so both the
+        drawn angle and the drawn length of the line shrink.
+    ``"line"``
+        the D_IC line stays on x. Its length is then always true and only
+        the angle foreshortens.
+
+    Clearance is the perpendicular distance in the IMAGE from the projected
+    D_IC segment, not from a camera axis -- the two are the same thing only
+    when the line is on x, which is why measuring against the axis gave a
+    frame-dependent answer and flattered ``"arm"`` by a factor of five.
+
+    Only the stretch of the segment strictly between the exits is judged
+    (``band``): a channel is entitled to sit at its own mouth.
+
+    ``max_angle_error`` and ``min_dic_fraction`` cap what the roll may cost
+    the figure's own measurements. Rolls outside either budget are not
+    considered, so a tidier picture can never be bought with a number the
+    reader would misread.
+
+    Returns ``(roll, frame, clearance, drawn, true, dic_fraction)``.
+    """
+    builders = {"arm": arm_frame, "line": ic_line_frame}
+    if about not in builders:
+        raise ValueError("about must be 'arm' or 'line', got %r" % (about,))
+    build = builders[about]
+    pts = np.atleast_2d(np.asarray(points, float))
+    p2a = np.asarray(p2, float).reshape(3)
+    p3a = np.asarray(p3, float).reshape(3)
+    if float(np.linalg.norm(p3a - p2a)) < 1e-6:
+        raise ValueError("the two exits coincide; there is no line to clear")
+    true = drawn_oic(angle_frame(p1, p2, p3), p1, p2, p3)
+    lo, hi = float(band[0]), float(band[1])
+    best = None
+    for i in range(round(360.0 / float(step))):
+        roll = i * float(step)
+        f = build(p1, p2, p3, roll=roll, centre=centre,
+                  upstream_left=upstream_left)
+        shown = drawn_oic(f, p1, p2, p3)
+        frac = drawn_dic_fraction(f, p2a, p3a)
+        if abs(shown - true) > float(max_angle_error):
+            continue
+        if frac < float(min_dic_fraction):
+            continue
+        a = np.array([(p2a - f.centre) @ f.axes[0], (p2a - f.centre) @ f.axes[1]])
+        b = np.array([(p3a - f.centre) @ f.axes[0], (p3a - f.centre) @ f.axes[1]])
+        d = b - a
+        denom = float(d @ d)
+        q = np.stack([(pts - f.centre) @ f.axes[0], (pts - f.centre) @ f.axes[1]], axis=1)
+        t = ((q - a) @ d) / denom
+        inside = (t > lo) & (t < hi)
+        if inside.any():
+            foot = a[None, :] + t[inside, None] * d[None, :]
+            clear = float(np.linalg.norm(q[inside] - foot, axis=1).min())
+        else:
+            clear = float("inf")
+        if best is None or clear > best[2]:
+            best = (roll, f, clear, shown, true, frac)
+    if best is None:
+        raise ValueError(
+            "no roll meets the budgets (O_IC within %.1f deg of %.1f, D_IC at "
+            "least %.0f%% of true); widen them or use angle_frame()"
+            % (max_angle_error, true, 100 * min_dic_fraction))
+    return best
 
 
 def rotated(frame: Frame, degrees: float) -> Frame:
@@ -147,18 +357,28 @@ def rotated(frame: Frame, degrees: float) -> Frame:
     return Frame((r @ frame.axes.T).T, frame.centre, name=name)
 
 
-def pymol_view(frame: Frame, *, slab: float = 3000.0, distance: float = -150.0) -> List[float]:
+def pymol_view(frame: Frame, *, slab: float = 3000.0, distance: float = -150.0,
+               orthoscopic: bool = False) -> List[float]:
     """The 18 numbers ``cmd.set_view`` wants.
 
     PyMOL stores the rotation **column-wise**, so the axes matrix is
     transposed before flattening. The caller normally follows this with
     ``cmd.zoom(sel, buffer=0, complete=0)``, which keeps the rotation and
     fits the selection, then ``cmd.clip('slab', 3000)``.
+
+    The last number is the field of view, and its SIGN is the orthoscopic
+    flag: negative means perspective. Perspective is right for a figure of
+    one complex, where it reads as depth. It is wrong for a map whose job is
+    to compare patches: it makes a near patch larger than a far one of the
+    same size, and -- the reason this option exists -- it means moving a
+    label along the view axis drifts it across the screen, so lifting a label
+    clear of the surface also slides it away from the patch it names. Under
+    an orthographic camera that lift costs nothing on screen.
     """
     v = list(frame.axes.T.flatten())
     v += [0.0, 0.0, float(distance)]          # camera position
     v += [float(c) for c in frame.centre]      # origin of rotation
-    v += [1.0, float(slab), -20.0]             # near, far, orthoscopic flag slot
+    v += [1.0, float(slab), 20.0 if orthoscopic else -20.0]
     return v
 
 
@@ -217,6 +437,40 @@ def select_poses(poses, n_pse=None, n_svg=None):
     """
     ranked = [p for p, _ in sorted(poses, key=lambda t: (-float(t[1]), str(t[0])))]
     return parse_selection(n_pse, ranked), parse_selection(n_svg, ranked)
+
+
+def lift_to_front(anchors, toward_viewer, coords, margin: float = 2.0):
+    """Pull label anchors in front of the structure, along the view axis.
+
+    A label sits at its own anchor's depth. One naming a patch on the FAR side
+    of an enzyme therefore renders behind the near surface and washes out to
+    unreadable -- a collision in depth, which :func:`spread_in_view` cannot
+    fix because it deliberately never changes depth.
+
+    PyMOL's ``float_labels`` is the obvious answer and does not work here: it
+    applies to the interactive viewport, not to ray-traced output, which is
+    what a figure is. So the anchors are moved instead.
+
+    Only anchors that are actually behind get moved, and only as far as they
+    must be, because the camera is perspective: shifting a point along the
+    view axis drifts its screen position outward, so an unnecessary lift
+    pulls a label away from the patch it names.
+
+    Returns an ``(N, 3)`` array of displacements to add to ``anchors``.
+    """
+    pts = np.atleast_2d(np.asarray(anchors, float))
+    if pts.size == 0:
+        return np.zeros((0, 3))
+    if pts.shape[-1] != 3:
+        raise ValueError("anchors must be (N, 3), got %r" % (pts.shape,))
+    t = _unit(toward_viewer, "toward_viewer")
+    body = np.atleast_2d(np.asarray(coords, float))
+    if body.size == 0:
+        return np.zeros((len(pts), 3))
+    front = float((body @ t).max()) + float(margin)
+    depth = pts @ t
+    need = np.clip(front - depth, 0.0, None)
+    return need[:, None] * t[None, :]
 
 
 def spread_in_view(anchors, x_axis, y_axis, *, min_sep=16.0,

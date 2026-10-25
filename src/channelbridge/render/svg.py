@@ -43,7 +43,7 @@ import base64
 import io
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -121,7 +121,10 @@ class SvgStyle:
     stroke_width: float = 5.0
     font_size: float = 46.0
     #: Radius of the O_IC arc, and the length of the drawn upstream-axis arm.
-    arc_radius: float = 110.0
+    #: The arc was 110 and swept through the upstream ligand. It has to stay
+    #: clear of the sticks it would otherwise cross, and it reads perfectly
+    #: well small -- the angle is carried by the two rays, not by the arc.
+    arc_radius: float = 62.0
     arm_length: float = 150.0
     exit_dot_radius: float = 8.0
     #: How far a label block must stay clear of the channel line.
@@ -137,6 +140,35 @@ class SvgStyle:
     #: Smallest traced area kept, in reference pixels squared. Below this a
     #: contour is a speck of a neighbouring chain's surface, not a channel.
     min_area: float = 200.0
+    #: Outline drawn around the two protomers the pose is actually built on,
+    #: so they are picked out of an assembly of copies. Width in reference
+    #: pixels; 0 switches it off. It is drawn only when the render shows more
+    #: than those two chains -- on a pair render it would merely trace the
+    #: whole picture.
+    #: Ring drawn around an exit that does NOT sit on the silhouette's rim.
+    #: There the channel opens towards the camera, so the outline has no gap
+    #: to mark it with and the opening would otherwise read as a mistake --
+    #: the D_IC line appears to stop in the middle of the channel. The ring is
+    #: the disc as it really projects: edge-on it is a flat sliver, aimed at
+    #: you it is a circle. 0 switches it off.
+    #: Default OFF (user, 2026-10-25). It marks an exit whose outline has no
+    #: gap to show, which is real but is furniture on a frame where the line
+    #: already reads clearly -- and a rolled frame can put BOTH exits inside
+    #: their outlines, giving two of them. Set a width to switch it on.
+    mouth_ring_width: float = 0.0
+    #: How far inside the rim an exit must fall before it gets one, in pixels
+    #: at the reference width. Below this the outline's own gap is the cue.
+    mouth_ring_inset: float = 6.0
+    #: A wider stroke laid under the ring, in the background colour. The ring
+    #: sits on the channel fill, which is the same hue as the annotation, and
+    #: without this it is a red line on a red patch -- drawn, correct, and
+    #: invisible, which is how the first one shipped.
+    mouth_ring_halo: float = 4.0
+    focus_stroke_width: float = 4.0
+    focus_color: str = "grey20"
+    focus_opacity: float = 0.85
+    #: Smallest focus contour kept, in reference pixels squared.
+    focus_min_area: float = 2000.0
     font_family: str = "Helvetica, Arial, sans-serif"
     label_color: str = "black"
     #: Which measurements to print, in order. An empty list draws the geometry
@@ -146,13 +178,15 @@ class SvgStyle:
     _ALLOWED = (
         "fill_opacity", "stroke_width", "font_size", "arc_radius", "arm_length",
         "exit_dot_radius", "label_clearance", "margin", "mouth_open_factor",
-        "mouth_open_back", "smooth", "min_area", "font_family", "label_color",
-        "label_colour", "labels",
+        "mouth_open_back", "smooth", "min_area", "mouth_ring_width",
+        "mouth_ring_inset", "mouth_ring_halo", "focus_stroke_width",
+        "focus_color", "focus_colour", "focus_opacity", "focus_min_area",
+        "font_family", "label_color", "label_colour", "labels",
     )
     _KNOWN_LABELS = ("D_IC", "O_IC", "DO")
 
     def __post_init__(self):
-        for name in ("fill_opacity",):
+        for name in ("fill_opacity", "focus_opacity"):
             v = float(getattr(self, name))
             if not 0.0 <= v <= 1.0:
                 raise ValueError("%s must be in [0, 1], got %r" % (name, v))
@@ -160,10 +194,13 @@ class SvgStyle:
                      "exit_dot_radius", "smooth", "mouth_open_factor"):
             if float(getattr(self, name)) <= 0:
                 raise ValueError("%s must be positive, got %r" % (name, getattr(self, name)))
-        for name in ("label_clearance", "margin", "min_area", "mouth_open_back"):
+        for name in ("label_clearance", "margin", "min_area", "mouth_open_back",
+                     "focus_stroke_width", "focus_min_area", "mouth_ring_width",
+                     "mouth_ring_inset", "mouth_ring_halo"):
             if float(getattr(self, name)) < 0:
                 raise ValueError("%s must not be negative, got %r" % (name, getattr(self, name)))
         parse_color(self.label_color)
+        parse_color(self.focus_color)
         unknown = [str(k) for k in self.labels if str(k) not in self._KNOWN_LABELS]
         if unknown:
             raise ValueError(
@@ -182,9 +219,13 @@ class SvgStyle:
             )
         if "label_color" in raw and "label_colour" in raw:
             raise ValueError("%s: give only one of label_color, label_colour" % (where,))
+        if "focus_color" in raw and "focus_colour" in raw:
+            raise ValueError("%s: give only one of focus_color, focus_colour" % (where,))
         kw = {k: raw[k] for k in raw if k in cls.__dataclass_fields__}
         if "label_colour" in raw:
             kw["label_color"] = raw["label_colour"]
+        if "focus_colour" in raw:
+            kw["focus_color"] = raw["focus_colour"]
         if "labels" in raw:
             labels = raw["labels"]
             if isinstance(labels, str):
@@ -192,7 +233,9 @@ class SvgStyle:
             kw["labels"] = [str(x) for x in labels]
         for k in ("fill_opacity", "stroke_width", "font_size", "arc_radius", "arm_length",
                   "exit_dot_radius", "label_clearance", "margin", "mouth_open_factor",
-                  "mouth_open_back", "smooth", "min_area"):
+                  "mouth_open_back", "smooth", "min_area", "mouth_ring_width",
+        "mouth_ring_inset", "mouth_ring_halo", "focus_stroke_width",
+                  "focus_opacity", "focus_min_area"):
             if k in kw:
                 kw[k] = float(kw[k])
         try:
@@ -256,6 +299,18 @@ class Mouth:
     centre: np.ndarray            #: (x, y) in pixels
     radius: float                 #: of the disc, in pixels
     forward: np.ndarray           #: unit vector out of the protein, in pixels
+    #: The disc as it actually projects: semi-axes in pixels and the tilt of
+    #: the major one, in degrees clockwise from +x. A channel lying in the
+    #: view plane gives a near-flat ellipse (you see the opening edge-on); one
+    #: aimed at the viewer gives a near-circle (you are looking into it).
+    #: Measured from the rendered blob, so no 3D data is needed here.
+    semi_major: float = 0.0
+    semi_minor: float = 0.0
+    tilt_deg: float = 0.0
+    #: Distance from the centre to the silhouette's edge, in pixels; 0 when
+    #: the exit sits on the rim. A large value means the channel opens
+    #: towards the camera, so the outline has no gap to show for it.
+    inset_px: float = 0.0
 
     def __str__(self):
         return "%s at (%.0f, %.0f) r=%.0f" % (
@@ -288,6 +343,14 @@ def find_mouths(mouth, silhouette, min_pixels: int = 20,
         centre = np.array([xx[blob].mean(), yy[blob].mean()])
         radius = float(np.sqrt(blob.sum() / np.pi))
         key = "up" if mouth[blob].mean() < dark_below else "dn"
+        # the blob's own second moments give the projected ellipse directly
+        pts = np.stack([xx[blob] - centre[0], yy[blob] - centre[1]])
+        cov = np.cov(pts) if pts.shape[1] > 2 else np.eye(2)
+        evals, evecs = np.linalg.eigh(cov)
+        order = np.argsort(evals)[::-1]
+        evals, evecs = evals[order], evecs[:, order]
+        semi = 2.0 * np.sqrt(np.clip(evals, 0.0, None))
+        tilt = float(np.degrees(np.arctan2(evecs[1, 0], evecs[0, 0])))
         near = ((xx - centre[0]) ** 2 + (yy - centre[1]) ** 2 <= (3 * radius) ** 2) & sil
         if near.sum() < 3:
             # no channel beside this disc to take a direction from: fall back
@@ -298,11 +361,23 @@ def find_mouths(mouth, silhouette, min_pixels: int = 20,
             back = np.array([xx[near].mean(), yy[near].mean()]) - centre
         norm = float(np.linalg.norm(back))
         forward = -back / norm if norm > 1e-9 else np.array([1.0, 0.0])
-        found.setdefault(key, []).append(Mouth(key, centre, radius, forward))
+        found.setdefault(key, []).append(
+            Mouth(key, centre, radius, forward,
+                  semi_major=float(semi[0]), semi_minor=float(semi[1]),
+                  tilt_deg=tilt))
     out = {}
     for key, blobs in found.items():
         blobs.sort(key=lambda m: -m.radius)
         out[key] = blobs[0]
+    # How far inside the silhouette each exit falls. On the rim (0) the
+    # outline opens at the mouth and that gap IS the cue; well inside, the
+    # channel points at the camera and there is no gap to draw, so the
+    # assembler marks the opening explicitly instead.
+    edt = ndi.distance_transform_edt(sil)
+    for key, m in out.items():
+        x, y = round(float(m.centre[0])), round(float(m.centre[1]))
+        if 0 <= y < h and 0 <= x < w and sil[y, x]:
+            out[key] = replace(m, inset_px=float(edt[y, x]))
     missing = [k for k in ("up", "dn") if k not in out]
     if missing:
         raise ValueError(
@@ -311,6 +386,38 @@ def find_mouths(mouth, silhouette, min_pixels: int = 20,
             % (" and no ".join(missing), n)
         )
     return out
+
+
+def focus_outline(footprint, alpha, scale: float = 1.0, smooth: float = 1.5,
+                  min_area: float = 2000.0, cover: float = 0.90):
+    """Outline the protomers the pose is built on, inside a larger assembly.
+
+    The assembly render shows every copy of both enzymes, and the two the
+    geometry actually belongs to are told apart only by being a shade darker
+    -- which is not much to go on once they sit behind two translucent
+    neighbours. An outline says it outright.
+
+    It is traced from the ``footprint`` render, which already contains exactly
+    those two chains and nothing else, so no new scene is needed.
+
+    Returns ``[]`` when the footprint covers essentially the whole render:
+    that is a pair render, where an outline would trace the outside of the
+    picture and say nothing. ``cover`` is the fraction of drawn pixels above
+    which the outline is suppressed.
+    """
+    footprint = np.asarray(footprint, float)
+    alpha = np.asarray(alpha, bool)
+    if footprint.shape != alpha.shape:
+        raise ValueError(
+            "footprint %r and the base render %r come from different renders"
+            % (footprint.shape, alpha.shape))
+    inside = footprint < 0.5
+    drawn = int(alpha.sum())
+    if not drawn or not inside.any():
+        return []
+    if int((inside & alpha).sum()) >= float(cover) * drawn:
+        return []
+    return trace_contours(inside, scale, smooth, min_area)
 
 
 def trace_contours(silhouette, scale: float = 1.0, smooth: float = 1.5,
@@ -602,6 +709,7 @@ class _Layout:
     marker: Optional[AngleMarker]
     blocks: Dict[str, Placement]
     box: Tuple[float, float, float, float]
+    focus: List[np.ndarray] = field(default_factory=list)
 
 
 def svg_document(layout: _Layout, raster_b64: str, values: Mapping,
@@ -629,6 +737,15 @@ def svg_document(layout: _Layout, raster_b64: str, values: Mapping,
         '<image id="proteins" x="0" y="0" width="%d" height="%d" '
         'xlink:href="data:image/png;base64,%s"/>' % (layout.width, layout.height, raster_b64)
     )
+    if layout.focus and svg_style.focus_stroke_width > 0:
+        focus = rgb_to_hex(parse_color(svg_style.focus_color))
+        out.append('<g id="focus_outline" fill="none" stroke="%s" stroke-opacity="%.2f" '
+                   'stroke-width="%.1f" stroke-linejoin="round">'
+                   % (focus, svg_style.focus_opacity,
+                      svg_style.focus_stroke_width * k))
+        for i, p in enumerate(layout.focus):
+            out.append('<path id="focus_%d" d="%s"/>' % (i, path_closed(p)))
+        out.append("</g>")
     out.append('<g id="tunnels">')
     for i, p in enumerate(layout.polys):
         out.append(
@@ -655,6 +772,30 @@ def svg_document(layout: _Layout, raster_b64: str, values: Mapping,
            up.centre[0], up.centre[1], svg_style.exit_dot_radius * k, annot,
            dn.centre[0], dn.centre[1], svg_style.exit_dot_radius * k, annot)
     )
+    if svg_style.mouth_ring_width > 0:
+        rings = [m for m in (up, dn)
+                 if m.inset_px > svg_style.mouth_ring_inset * k
+                 and m.semi_major > 0]
+        if rings:
+            halo = rgb_to_hex(parse_color(style.background))
+            out.append('<g id="mouth_rings" fill="none">')
+            for m in rings:
+                geom_attr = ('cx="%.1f" cy="%.1f" rx="%.1f" ry="%.1f" '
+                             'transform="rotate(%.1f %.1f %.1f)"'
+                             % (m.centre[0], m.centre[1], m.semi_major,
+                                m.semi_minor, m.tilt_deg,
+                                m.centre[0], m.centre[1]))
+                if svg_style.mouth_ring_halo > 0:
+                    out.append(
+                        '<ellipse id="mouth_%s_halo" %s stroke="%s" '
+                        'stroke-width="%.1f" stroke-opacity="0.8"/>'
+                        % (m.key, geom_attr, halo,
+                           (svg_style.mouth_ring_width
+                            + 2 * svg_style.mouth_ring_halo) * k))
+                out.append(
+                    '<ellipse id="mouth_%s" %s stroke="%s" stroke-width="%.1f"/>'
+                    % (m.key, geom_attr, annot, svg_style.mouth_ring_width * k))
+            out.append("</g>")
     m = layout.marker
     if m is not None:
         large, sweep = _arc_flags(m)
@@ -763,6 +904,11 @@ def build_svg(base_png, mask_png, mouth_png, footprint_png, out_svg, values: Map
             "or the footprint may not overlap it"
         )
     alpha = np.asarray(rgba)[..., 3] > 20
+    focus = focus_outline(_gray(footprint_png), alpha, scale, svg_style.smooth,
+                          svg_style.focus_min_area)
+    if focus:
+        report("outlined %d focus protomer contour(s): the pair the geometry "
+               "belongs to, picked out of the assembly" % len(focus))
     marker = None
     want_marker = ("O_IC" in values and "O_IC" in svg_style.labels) or axis_px is not None
     if want_marker:
@@ -796,7 +942,8 @@ def build_svg(base_png, mask_png, mouth_png, footprint_png, out_svg, values: Map
         pts += [(p.x, p.y), (p.x + wblock, p.y + hblock)]
     box = content_box(alpha, sil, pts, svg_style.margin)
     report("frame (viewBox): x %.0f y %.0f w %.0f h %.0f of %d x %d" % (*box, w, h))
-    layout = _Layout(w, h, scale, mouths, polys, sil, alpha, marker, blocks, box)
+    layout = _Layout(w, h, scale, mouths, polys, sil, alpha, marker, blocks, box,
+                     focus=focus)
     text = svg_document(layout, _embed(base_png), values, style, svg_style, title)
     with open(out_svg, "w", encoding="utf-8") as fh:
         fh.write(text)
@@ -830,6 +977,17 @@ def write_preview(out_png, base_png, layout: _Layout, values: Mapping,
     annot = tuple(round(c * 255) for c in style.palette.rgb("annotation"))
     sw = max(1, round(svg_style.stroke_width * k))
 
+    if layout.focus and svg_style.focus_stroke_width > 0:
+        fcol = tuple(round(c * 255) for c in parse_color(svg_style.focus_color))
+        fw = max(1, round(svg_style.focus_stroke_width * k))
+        fl = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        fdraw = ImageDraw.Draw(fl)
+        for poly in layout.focus:
+            pts = [tuple(float(x) for x in q) for q in poly]
+            fdraw.line(pts + pts[:1], fill=(*fcol, round(255 * svg_style.focus_opacity)),
+                       width=fw, joint="curve")
+        canvas.alpha_composite(fl)
+
     fill_layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     fd = ImageDraw.Draw(fill_layer)
     for poly in layout.polys:
@@ -849,6 +1007,25 @@ def write_preview(out_png, base_png, layout: _Layout, values: Mapping,
         r = svg_style.exit_dot_radius * k
         d.ellipse([m.centre[0] - r, m.centre[1] - r, m.centre[0] + r, m.centre[1] + r],
                   fill=(*annot, 255))
+    if svg_style.mouth_ring_width > 0:
+        rw = max(1, round(svg_style.mouth_ring_width * k))
+        for m in (up, dn):
+            if m.inset_px <= svg_style.mouth_ring_inset * k or m.semi_major <= 0:
+                continue
+            # Pillow cannot rotate an ellipse, so it is drawn as a polygon of
+            # its own parametric points -- the same ellipse the SVG writes.
+            th = np.radians(m.tilt_deg)
+            c, sn = math.cos(th), math.sin(th)
+            t = np.linspace(0, 2 * np.pi, 72)
+            ex, ey = m.semi_major * np.cos(t), m.semi_minor * np.sin(t)
+            pts = [(float(m.centre[0] + c * x - sn * y),
+                    float(m.centre[1] + sn * x + c * y)) for x, y in zip(ex, ey)]
+            if svg_style.mouth_ring_halo > 0:
+                hw = max(1, round((svg_style.mouth_ring_width
+                                   + 2 * svg_style.mouth_ring_halo) * k))
+                hc = tuple(round(v * 255) for v in parse_color(style.background))
+                d.line(pts + pts[:1], fill=(*hc, 204), width=hw, joint="curve")
+            d.line(pts + pts[:1], fill=(*annot, 255), width=rw, joint="curve")
     mk = layout.marker
     if mk is not None:
         d.line([tuple(mk.arm_start), tuple(mk.vertex)], fill=(*annot, 255), width=sw)

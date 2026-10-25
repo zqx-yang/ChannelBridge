@@ -29,15 +29,54 @@ import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
+
+#: How a figure file is named. The prefix is the user's, given per step; the
+#: pose id locates it; the rest says what the file IS. Deliberately short --
+#: the long pose stem (DO, d, o, patches, angles) belongs on the pose-search
+#: OUTPUT, which records the geometry, not on a figure of it.
+def session_name(prefix: str, pose_id: str) -> str:
+    """``<prefix>_<geom>_render.pse``."""
+    return "%s_%s_render.pse" % (prefix, pose_id)
+
+
+def hotspot_map_name(prefix: str) -> str:
+    """``<prefix>_hotspot-map.pse`` -- one per enzyme pair, not per pose."""
+    return "%s_hotspot-map.pse" % prefix
+
+
+def svg_name(prefix: str, pose_id: str, variant: str) -> str:
+    """``<prefix>_<geom>_render_<pair|assembly>.svg``."""
+    return "%s_%s_render_%s.svg" % (prefix, pose_id, variant)
+
+
+def complex_name(prefix: str, stem: str) -> str:
+    """``<prefix>_<full pose stem>_complex.pdb`` for a structure copied out.
+
+    The full stem, not the short ``geom001``: this is a structure someone will
+    hand to a colleague or a generator, and it should carry its own geometry
+    (D_IC, O_IC, the patch pair, the orientation) in its name.
+    """
+    return "%s_%s_complex.pdb" % (prefix, stem)
+
+
+def helper_name(prefix: str, pose_id: str, scene: str) -> str:
+    """Intermediate renders, kept beside the figures they were traced from."""
+    return "%s_%s_%s.png" % (prefix, pose_id, scene)
+
+
 __all__ = [
     "DEFAULT_PYMOL",
     "SCENES_FOR_SVG",
     "GeomFiles",
     "collect_poses",
+    "complex_name",
     "default_pymol",
+    "helper_name",
     "helper_renders",
+    "hotspot_map_name",
     "scan_output",
-    "svg_scene_name",
+    "session_name",
+    "svg_name",
 ]
 
 #: Where to find PyMOL, in order: the ``CHBRIDGE_PYMOL`` environment variable,
@@ -157,16 +196,17 @@ def collect_poses(geoms: Sequence[GeomFiles]):
     return [(g.pose_id, g.do if g.do is not None else float("-inf")) for g in geoms]
 
 
-def svg_scene_name(variant: str, cross_section: bool = False) -> str:
-    """The scene an SVG of this variant is rendered from."""
-    base = "render_cs" if cross_section else "render"
-    return "%s_%s" % (base, variant) if not cross_section else base
+def helper_renders(out_dir: str, pose_id: str, width: int, height: int,
+                   prefix: str = "", variant: str = "pair") -> Dict[str, str]:
+    """Where the flat helpers for one pose and variant live.
 
-
-def helper_renders(out_dir: str, pose_id: str, width: int, height: int) -> Dict[str, str]:
+    Per variant, because the pair and the assembly are framed differently and
+    an overlay traced from the wrong camera lands away from the proteins.
+    """
+    suffix = "_assembly" if variant == "assembly" else ""
     return {
         scene: os.path.join(out_dir, "intermediate",
-                            "%s_%s_bgFFFFFF.png" % (pose_id, scene))
+                            helper_name(prefix or "fig", pose_id, scene + suffix))
         for scene in SCENES_FOR_SVG
     }
 
@@ -222,7 +262,8 @@ def _ensure_dirs(out_dir: str, dry_run: bool) -> None:
 
 def build(plan, geoms: Sequence[GeomFiles], out_dir: str, *, runner: Optional[Runner] = None,
           width: int = 1200, height: int = 900, pse_args: Sequence[str] = (),
-          style=None, svg_style=None, report=print) -> Dict[str, List[str]]:
+          style=None, svg_style=None, prefix: str = "fig",
+          report=print) -> Dict[str, List[str]]:
     """Carry out a :class:`~channelbridge.render.select.FigurePlan`.
 
     Returns what was written, by kind. Nothing here fails the whole run: a
@@ -239,7 +280,7 @@ def build(plan, geoms: Sequence[GeomFiles], out_dir: str, *, runner: Optional[Ru
         if g is None or not g.complex_pdb:
             made["failed"].append("%s: no complex PDB" % pid)
             continue
-        dst = os.path.join(out_dir, "%s_complex.pdb" % g.stem)
+        dst = os.path.join(out_dir, complex_name(prefix, g.stem))
         runner.copy(g.complex_pdb, dst)
         made["pdb"].append(dst)
 
@@ -248,7 +289,12 @@ def build(plan, geoms: Sequence[GeomFiles], out_dir: str, *, runner: Optional[Ru
         if g is None:
             made["failed"].append("%s: not in the output folder" % pid)
             continue
-        dst = g.pse or os.path.join(out_dir, "%s.pse" % g.stem)
+        # Always the canonical name, even when a session of the OLD convention
+        # (<stem>.pse, next to the pose) was found: a build writes where this
+        # step's naming says, or the --prefix means nothing. A found session
+        # still counts as "on disk" upstream, so it is not rebuilt without
+        # --rebuild; it is only overwritten here when a rebuild was asked for.
+        dst = os.path.join(out_dir, session_name(prefix, pid))
         report("  [%s] session -> %s" % (pid, dst))
         rc = runner.run(runner.script("run_pse.py"),
                         ["complex=%s" % g.complex_pdb, "out=%s" % dst, *pse_args])
@@ -264,29 +310,36 @@ def build(plan, geoms: Sequence[GeomFiles], out_dir: str, *, runner: Optional[Ru
             made["failed"].append("%s: no session to render from" % pid)
             continue
         report("  [%s] SVG" % pid)
-        helpers = helper_renders(out_dir, pid, width, height)
-        ok = True
-        for scene, path in helpers.items():
-            if os.path.exists(path) and not runner.dry_run:
-                report("    [have] %s" % os.path.basename(path))
-                continue
-            rc = runner.run(runner.script("run_png.py"),
-                            ["pse=%s" % g.pse, "scene=%s" % scene, "out=%s" % path,
-                             "w=%d" % width, "h=%d" % height])
-            if rc:
-                made["failed"].append("%s: %s render exited %d" % (pid, scene, rc))
-                ok = False
-                break
-        if not ok:
-            continue
+        # The helpers are rendered per VARIANT below, not once up front: the
+        # two variants are framed differently, and tracing the assembly's
+        # overlay from pair-framed helpers puts the channel outline off the
+        # proteins entirely. Each is a ray-trace of minutes, so they are also
+        # not rendered twice.
         for scene in plan_scene_names(plan):
             # the SVG is assembled on the base raster of that variant, NOT on
             # the render scene: the render scene already carries the 3D
             # channel and the 3D D_IC/O_IC/DO annotation, and the SVG adds
             # both as vectors, so building on it prints every label twice.
             raster_scene = _svg_raster_scene(scene)
+            variant = scene.replace("render_", "")
+            helpers = helper_renders(out_dir, pid, width, height, prefix, variant)
+            ok = True
+            for hscene, hpath in helpers.items():
+                hsc = hscene + ("_assembly" if variant == "assembly" else "")
+                if os.path.exists(hpath) and not runner.dry_run:
+                    continue
+                rc = runner.run(runner.script("run_png.py"),
+                                ["pse=%s" % g.pse, "scene=%s" % hsc,
+                                 "out=%s" % hpath, "w=%d" % width, "h=%d" % height])
+                if rc:
+                    made["failed"].append("%s: %s render exited %d" % (pid, hsc, rc))
+                    ok = False
+            if not ok:
+                # a missing helper means a traced overlay with a hole in it,
+                # which is worse than no SVG: it looks finished
+                continue
             base = os.path.join(out_dir, "intermediate",
-                                "%s_%s_transparent.png" % (pid, raster_scene))
+                                helper_name(prefix, pid, raster_scene + "_transparent"))
             if not (os.path.exists(base) and not runner.dry_run):
                 rc = runner.run(runner.script("run_png.py"),
                                 ["pse=%s" % g.pse, "scene=%s" % raster_scene,
@@ -295,7 +348,8 @@ def build(plan, geoms: Sequence[GeomFiles], out_dir: str, *, runner: Optional[Ru
                 if rc:
                     made["failed"].append("%s: %s render exited %d" % (pid, scene, rc))
                     continue
-            dst = os.path.join(out_dir, "%s_%s_%s.svg" % (g.stem, scene, "rotated0"))
+            dst = os.path.join(out_dir,
+                               svg_name(prefix, pid, scene.replace("render_", "")))
             if runner.dry_run:
                 report("    would assemble %s" % dst)
                 made["svg"].append(dst)
@@ -314,20 +368,28 @@ def build(plan, geoms: Sequence[GeomFiles], out_dir: str, *, runner: Optional[Ru
 
 def _svg_raster_scene(render_scene: str) -> str:
     """The annotation-free scene an SVG of *render_scene* is built on."""
-    if render_scene == "render_cs":
-        return "base_cs"
     return render_scene.replace("render_", "base_")
+
+
+def _svg_helper_scenes(render_scene: str):
+    """The flat helpers an SVG of *render_scene* traces its overlay from.
+
+    They are per variant because the variants are framed differently: the
+    assembly is fitted to the whole assembly, the pair to the focus pair.
+    Tracing the overlay from a helper rendered with the other camera puts the
+    channel outline and the D_IC/O_IC line somewhere other than the proteins.
+    """
+    suffix = "_assembly" if render_scene.endswith("assembly") else ""
+    return {k: k + suffix for k in ("mask", "mouth", "footprint")}
 
 
 def plan_scene_names(plan) -> List[str]:
     """The render scenes an SVG is wanted for, from the plan's variants."""
     names: List[str] = []
-    for variant in ("monomer", "multimer"):
+    for variant in ("pair", "assembly"):
         if plan.render in (variant, "both"):
             names.append("render_" + variant)
-    if plan.cross_section != "none":
-        names.append("render_cs")
-    return names or ["render_monomer"]
+    return names or ["render_pair"]
 
 
 def main(argv=None) -> int:  # pragma: no cover - thin

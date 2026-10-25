@@ -70,23 +70,19 @@ class TestScanOutput:
 
 
 class TestPlanSceneNames:
-    def test_monomer_only_by_default(self):
+    def test_pair_only_by_default(self):
         plan = resolve([("geom001", 0.8)], svg="all")
-        assert plan_scene_names(plan) == ["render_monomer"]
+        assert plan_scene_names(plan) == ["render_pair"]
 
     def test_both_gives_both(self):
         plan = resolve([("geom001", 0.8)], svg="all", render="both")
-        assert plan_scene_names(plan) == ["render_monomer", "render_multimer"]
-
-    def test_the_cross_section_is_added_when_asked_for(self):
-        plan = resolve([("geom001", 0.8)], svg="all", cross_section="monomer")
-        assert "render_cs" in plan_scene_names(plan)
+        assert plan_scene_names(plan) == ["render_pair", "render_assembly"]
 
     def test_a_render_of_none_still_leaves_something_to_assemble(self):
         # asking for an SVG and no variant is a contradiction; assembling the
-        # monomer is the least surprising reading of it
+        # pair is the least surprising reading of it
         plan = resolve([("geom001", 0.8)], svg="all", render="none")
-        assert plan_scene_names(plan) == ["render_monomer"]
+        assert plan_scene_names(plan) == ["render_pair"]
 
 
 class TestBuild:
@@ -171,16 +167,22 @@ class TestSvgRasterScene:
     def test_each_render_variant_maps_to_its_base(self):
         from channelbridge.figures import _svg_raster_scene
 
-        assert _svg_raster_scene("render_monomer") == "base_monomer"
-        assert _svg_raster_scene("render_multimer") == "base_multimer"
-        assert _svg_raster_scene("render_cs") == "base_cs"
+        assert _svg_raster_scene("render_pair") == "base_pair"
+        assert _svg_raster_scene("render_assembly") == "base_assembly"
+
+    def test_the_assembly_traces_its_overlay_from_assembly_helpers(self):
+        # the variants are framed differently, so a helper from the other
+        # camera puts the channel outline somewhere other than the proteins
+        from channelbridge.figures import _svg_helper_scenes
+
+        assert _svg_helper_scenes("render_pair")["mask"] == "mask"
+        assert _svg_helper_scenes("render_assembly")["mask"] == "mask_assembly"
 
     def test_the_session_builder_knows_those_scene_names(self):
         from channelbridge.figures import _svg_raster_scene, plan_scene_names
         from channelbridge.render.scenes import SCENE_NAMES
 
-        plan = resolve([("geom001", 0.8)], svg="all", render="both",
-                       cross_section="monomer")
+        plan = resolve([("geom001", 0.8)], svg="all", render="both")
         for scene in plan_scene_names(plan):
             assert _svg_raster_scene(scene) in SCENE_NAMES, scene
 
@@ -214,3 +216,76 @@ class TestPymolResolution:
 
         monkeypatch.setenv("CHBRIDGE_PYMOL", "/late/pymol")
         assert Runner().binary == "/late/pymol"
+
+
+class TestOutputNames:
+    """The user's naming scheme (2026-10-25).
+
+    One prefix per step, chosen by the user, at the FRONT of every file that
+    step writes -- so the files of two runs over the same poses never collide
+    and `ls` groups them by run rather than by scene.
+    """
+
+    def test_the_hotspot_map_carries_no_pose(self):
+        # it is built BEFORE the pose search, so there is no pose to name it
+        # after; one map per enzyme pair
+        from channelbridge.figures import hotspot_map_name
+
+        assert hotspot_map_name("p6a") == "p6a_hotspot-map.pse"
+
+    def test_a_session_is_prefix_pose_render(self):
+        from channelbridge.figures import session_name
+
+        assert session_name("p6a", "geom001") == "p6a_geom001_render.pse"
+
+    def test_each_variant_gets_its_own_svg(self):
+        from channelbridge.figures import svg_name
+
+        assert svg_name("p6a", "geom001", "pair") == "p6a_geom001_render_pair.svg"
+        assert (svg_name("p6a", "geom001", "assembly")
+                == "p6a_geom001_render_assembly.svg")
+
+    def test_helpers_keep_the_prefix_so_two_runs_do_not_share_them(self):
+        from channelbridge.figures import helper_name
+
+        assert helper_name("p6a", "geom001", "mask") == "p6a_geom001_mask.png"
+        assert (helper_name("p6a", "geom001", "mask_assembly")
+                == "p6a_geom001_mask_assembly.png")
+
+    def test_a_structure_copied_out_keeps_its_whole_geometry(self):
+        # a .pdb is handed to a colleague or a generator, so it carries the
+        # full stem rather than the short geom id
+        from channelbridge.figures import complex_name
+
+        stem = "geom001_DO0.850_d017.0_o165_GDHp4-FNRp1_az000_ti090_sp240_ok"
+        assert complex_name("p6a", stem) == "p6a_%s_complex.pdb" % stem
+
+    def test_a_dotted_pose_id_survives_the_names(self):
+        # the DO-sampled ids carry decimals (DO0.870_d010.0); the user chose
+        # to keep them, so nothing here may split on "."
+        from channelbridge.figures import session_name, svg_name
+
+        pid = "geom001_DO0.870_d010.0_o135_p3-p1_az000_ti030_sp270_ok"
+        assert session_name("p6a", pid).endswith("_ok_render.pse")
+        assert svg_name("p6a", pid, "pair").endswith("_ok_render_pair.svg")
+
+
+class TestABuildWritesWhereTheNamingSays:
+    """A found session of the old convention must not capture the output.
+
+    `scan_output` discovers `<stem>.pse` beside the pose, which is where the
+    first version of this put them. If a build wrote back to that, `--prefix`
+    would silently do nothing for anyone with such a file on disk.
+    """
+
+    def test_the_canonical_name_wins_over_a_discovered_one(self, tmp_path):
+        from channelbridge.figures import GeomFiles, Runner, build
+
+        g = GeomFiles(pose_id="geom001", stem="geom001_DO0.850_ok",
+                      directory=str(tmp_path),
+                      complex_pdb=str(tmp_path / "x_complex.pdb"),
+                      pse=str(tmp_path / "geom001_DO0.850_ok.pse"))
+        plan = resolve([("geom001", 0.85)], pse="rank1")
+        made = build(plan, [g], str(tmp_path), runner=Runner(dry_run=True),
+                     prefix="p6a", report=lambda *_: None)
+        assert made["pse"] == [os.path.join(str(tmp_path), "p6a_geom001_render.pse")]

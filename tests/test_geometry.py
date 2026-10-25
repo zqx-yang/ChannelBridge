@@ -119,3 +119,34 @@ class TestGeometryFromExits:
         assert d == pytest.approx(16.0)
         assert o == pytest.approx(180.0)
         assert do == pytest.approx(do_score(16.0, 180.0))
+
+
+class TestOicIsOneSided:
+    """O_IC measures the DONOR channel's aim and nothing else.
+
+    Measured on the p6a GDH-FNR pose: O_IC 165 deg at the upstream exit, but
+    the same angle at the downstream exit is 90 deg -- the receiving mouth
+    opens sideways to the line joining the two exits. DO cannot see that, so
+    two geometries that differ entirely in whether the acceptor faces the
+    donor score identically. The map reports it; it must never enter the
+    score, whose published coefficients cover D_IC and O_IC only.
+    """
+
+    def test_the_score_ignores_the_downstream_orientation(self):
+        from channelbridge.geometry import do_score
+
+        # identical D_IC and O_IC; the acceptor's own aim is not an argument
+        # the function even accepts, which is the point
+        assert do_score(17.0, 165.0) == do_score(17.0, 165.0)
+
+    def test_the_angle_is_computed_at_the_upstream_exit(self):
+        import numpy as np
+
+        from channelbridge.geometry import o_ic
+
+        # P1 -> P2 heading +x, P3 straight ahead: perfectly aimed, 180 deg
+        p1, p2, p3 = np.array([-1.0, 0, 0]), np.zeros(3), np.array([17.0, 0, 0])
+        assert abs(o_ic(p1, p2, p3) - 180.0) < 1e-6
+        # move P3 sideways and the angle falls, because the DONOR now misses
+        p3b = np.array([0.0, 17.0, 0.0])
+        assert abs(o_ic(p1, p2, p3b) - 90.0) < 1e-6

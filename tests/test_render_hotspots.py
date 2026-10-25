@@ -315,3 +315,85 @@ class TestNeutralTwin:
                                     "neutral": "white"})
         assert p.background_classes == ("BURIED", "AVOID")
         assert p.neutral == "white"
+
+
+class TestTogglingIsWhatTheSessionIsFor:
+    """A patch switched off must stop being visible.
+
+    It did not: the neutral twin under the patches was tinted with each
+    patch's own colour, so that the scene still "read" with the patch objects
+    hidden. The effect was that toggling -- the one thing this session exists
+    to support -- changed nothing on screen.
+
+    The structure now is a translucent whole-enzyme BASE with every element
+    (each class, each patch) a solid object on top of it, so switching one on
+    says "this, here, on this surface".
+    """
+
+    def test_the_base_is_the_only_translucent_thing(self):
+        from channelbridge.render.hotspots import HotspotMapSpec
+
+        spec = HotspotMapSpec(up_name="E1", dn_name="E2")
+        assert spec.transparency == 0.0, "elements are solid"
+        assert 0.0 < spec.base_transparency < 1.0, "the base is not"
+
+    def test_labels_are_built_but_off(self):
+        # ten names on two crowded faces could not all be placed beside the
+        # patch they name; every patch is its own named object instead
+        from channelbridge.render.hotspots import HotspotMapSpec
+
+        assert HotspotMapSpec(up_name="E1", dn_name="E2").show_labels is False
+
+    def test_the_binder_envelope_uses_the_house_colour(self):
+        from channelbridge.render.hotspots import ClassPalette
+        from channelbridge.render.style import parse_color
+
+        assert ClassPalette().binder.lower() == "#0065bd"
+        assert parse_color(ClassPalette().binder)      # and it parses
+
+
+class TestMapObjects:
+    """The named object groups, instead of eight bare lists in a long function.
+
+    A scene is DEFINED by which of these it shows, so giving them a type
+    makes the scene definitions read as what they mean -- and makes it
+    impossible to append a tunnel to the ligand list without noticing.
+    """
+
+    def _filled(self):
+        from channelbridge.render.hotspots import MapObjects
+
+        return MapObjects(base=["base"], classes=["cls"], patches=["pat"],
+                          tunnels=["tun"], mouths=["mouth"], ligands=["lig"],
+                          envelopes=["env"], labels=["lab"],
+                          annotation=["IC_line"])
+
+    def test_structure_is_what_is_always_shown(self):
+        assert self._filled().structure == ["base", "tun", "mouth", "lig"]
+
+    def test_the_default_scene_carries_classes_and_patches(self):
+        # an epitope only means something read against the classes under it
+        scene = self._filled().scene()
+        assert "cls" in scene and "pat" in scene
+
+    def test_envelopes_labels_and_annotation_are_off_by_default(self):
+        scene = self._filled().scene()
+        for name in ("env", "lab", "IC_line"):
+            assert name not in scene
+
+    def test_they_can_be_switched_on(self):
+        scene = self._filled().scene(envelopes=True, labels=True)
+        assert "env" in scene and "lab" in scene
+
+    def test_the_annotation_is_never_in_a_scene(self):
+        # it is built so it can be enabled by hand; the map is about the
+        # epitopes, and the numbers describe the placement, not any patch
+        o = self._filled()
+        for kw in ({}, {"envelopes": True}, {"labels": True},
+                   {"classes": False}, {"patches": False}):
+            assert "IC_line" not in o.scene(**kw)
+
+    def test_an_empty_map_yields_an_empty_scene(self):
+        from channelbridge.render.hotspots import MapObjects
+
+        assert MapObjects().scene() == []

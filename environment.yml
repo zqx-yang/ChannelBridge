@@ -1,0 +1,43 @@
+# A conda environment that can run everything except CAVER.
+#
+#   conda env create -f environment.yml
+#   conda activate channelbridge
+#   pip install -e '.[dev,figures,yaml]'
+#
+# Why conda and not pip alone: PyMOL. The pose and figure stages shell out to
+# a `pymol` binary rather than importing it, and conda-forge is the only
+# routine way to get an open-source build with its Qt/GL stack on a machine
+# where you are not root. Everything else here is pip-installable and is
+# listed in pyproject.toml as well -- this file exists so that one command
+# gives you a working environment, not to be a second source of truth for the
+# Python dependencies.
+#
+# CAVER is NOT here and cannot be: it is GPL-3 software from Masaryk
+# University, distributed under a registration we are not entitled to pass
+# on. Download it yourself (free for academic use) and point $CAVER at it;
+# see .devcontainer/README.md. Only a JRE is provided, so a downloaded CAVER
+# runs as-is.
+name: channelbridge
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  # the package itself
+  - numpy>=1.20
+  - pyyaml>=5.4
+  # the figure layer: the SVG assembler and the PNG post-processing
+  - scipy>=1.7
+  - matplotlib>=3.4
+  - pillow>=8.0
+  # shelled out to, never imported, so any 2.x/3.x build works
+  - pymol-open-source>=2.5
+  # CAVER is pure Java and needs no display
+  - openjdk>=11
+  # tests and lint
+  - pytest>=7.0
+  - ruff>=0.4
+  - pip
+  - pip:
+      # the package in editable mode, so `chbridge` is on PATH and src/ is
+      # what you are editing
+      - -e .
