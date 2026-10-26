@@ -4,6 +4,10 @@ Seven stages. **Five of the seven are optional**, and each optional stage can
 be replaced by the user's own answer rather than skipped — the point is that
 nothing downstream has to care which route the input took.
 
+(There is also a **stage 0**, the ChannelsDB lookup. It is numbered 0 rather
+than counted among the seven because it is a place to *get* a tunnel, not a
+step in the chain — see [Stage 0](#stage-0-look-before-you-compute).)
+
 | # | stage | optional | you can instead |
 |---|---|---|---|
 | 1 | structure selection and preparation | yes | hand in prepared PDBs |
@@ -53,7 +57,7 @@ from the minimum until an orientation exists that does not interpenetrate.
 DO falls monotonically with `d`, so the smallest clash-free `d` is the
 highest-DO geometry available at O_IC 180.
 
-On the p6a GDH–FNR pair that is **D_IC 9.0 Å, O_IC 180°, DO 0.9314** (tilt 30,
+On the worked GDH–FNR example that is **D_IC 9.0 Å, O_IC 180°, DO 0.9314** (tilt 30,
 azimuth 240, spin 240; closest approach 3.38 Å). The pose search, run later
 over its full grid, independently reaches 8.0 Å at O_IC 180 — one grid step
 better, which is the expected size of the difference: the placement's clash
@@ -64,12 +68,90 @@ Two things this placement deliberately does **not** do:
 
 * it applies no bridgeable-pair, binder-gap or occupancy test. Those are what
   the search is for, and a map that refused to be drawn because no binder
-  fits would hide exactly the fact worth seeing. On p6a the ideal geometry is
+  fits would hide exactly the fact worth seeing. On the worked example the ideal geometry is
   one where no patch pair has room for a binder — which is why the search's
   best real pose is at D_IC 17 Å, not 9 Å.
 * it is not a pose. It is a frame to look at epitopes in.
 
+## Stage 0: look before you compute
+
+The first question is not "what does this structure's channel look like" but
+"has someone already computed it". ChannelsDB 2.0 holds tunnels for deposited
+entries, annotated by what they lead to and computed by both MOLE and CAVER.
+
+It is stage 0 rather than a branch of stage 2 because **it takes no structure
+as input**. You search by enzyme name or PDB id, and the answer decides which
+entry you go on to prepare -- so preparing first would be preparing the wrong
+thing, or preparing something you did not need.
+
+Two consequences worth stating before anyone relies on it:
+
+* **Coverage is per ENTRY.** 4-coumarate:CoA ligase has thirteen PDB entries
+  and two carry tunnels; 5BST has none, 5BSR has 25. Search the enzyme, not
+  the structure you happen to hold -- and search past the first hit. Over the
+  24 enzymes of [the iMARS example set](../examples/iMARS/README.md), checking
+  198 candidate entries, only **4** of the 24 top-ranked hits were annotated,
+  while **22** had an annotated entry somewhere in their top twelve. Going
+  down the ranks is the difference between the branch being available and
+  not. It is also a weaker claim: a rank-11 hit at 0.52 sequence-search score
+  is evidence about the family, not about that enzyme, so record the rank and
+  the score with the choice.
+* **Taking their tunnel means taking their structure.** The sphere chain is
+  in that entry's frame, and nothing re-fits it. Prep may extract chains and
+  delete waters; it must not move coordinates. Expanding a biological
+  assembly moves them, and the result looks like a 19-40 A disagreement
+  rather than like the mistake it is.
+
+If nothing is annotated, run CAVER (stage 2) -- which is the normal case for
+a model, a mutant, or anything unpublished.
+
+**And check what you fetched before measuring from it.** The database
+truncates a chain by its own surface definition, which is not this package's:
+13 of the 21 annotated enzymes in the iMARS set have no chain whose ends
+reach bulk solvent as `truncate_at_surface` defines it. D_IC and O_IC are
+both measured at the mouth, so the branch is sound for finding and
+cross-checking a route and needs care before it is used to measure an exit.
+The normalise step's verdict column says which case you are in.
+
+## Stage 2b: normalisation, and why it is its own step
+
+CAVER gives you a chain of probe spheres. Three things about that chain are
+properties of the RUN rather than of the protein, and all three feed straight
+into D_IC and O_IC:
+
+* **Direction.** The chain's order is not guaranteed to run inner to outer,
+  and everything downstream takes the last sphere as the exit. `oriented()`
+  fixes the direction from burial.
+* **Where it stops.** CAVER runs the chain out to `shell_radius`, which is
+  deliberately set large enough that it certainly leaves the protein -- and
+  therefore ends some arbitrary distance out in solvent.
+  `truncate_at_surface()` cuts it back to where it actually crosses the
+  surface. Measured over a `shell_radius` sweep: raw D_IC drifts by up to
+  **19 A** across shell radii 3-16 (34.7 / 28.7 / 21.8 / 15.6 A on one
+  construct) while the
+  normalised value stops moving once the chain clears the surface (25.76 vs
+  26.25 A between shell 10 and 16, where the raw value still moved 6.2 A).
+* **Sphere spacing.** The O_IC arm is defined as an arc length, so its
+  direction depends on how densely that particular build sampled.
+  `resample()` puts the spheres at a uniform 1 A spacing.
+
+**Why it is separate from the run.** Two reasons, and the second is the one
+that shapes the pipeline:
+
+1. CAVER does not do it. It is our post-processing, and keeping it separate
+   means the raw output stays on disk exactly as the tool wrote it.
+2. **It is not CAVER-specific.** A tunnel from ChannelsDB needs it just as
+   much: MOLE's endpoint convention is not ours either, and the same chain
+   from the two sources differs in length (our GDH cluster 1 is 24.2 A raw,
+   the matching ChannelsDB tunnel 15.9 A). So normalisation sits *after* the
+   two sources merge, not inside the CAVER branch.
+
 ## Stage 3: which surface a binder may use
+
+Nothing reaches the pose search without this stage. The scan places a binder
+on a (patch, patch) pair and marks any pose with none as
+`no_bridgeable_pair`, so there is no route from a tunnel to a pose that skips
+patch selection.
 
 `chbridge patches` classifies every residue of one enzyme into exactly one
 of seven classes and then ranks clusters of the usable ones as candidate
@@ -128,7 +210,9 @@ scores exactly like one facing the donor squarely.
 
 The pose search samples that orientation anyway -- it is the `tilt`
 parameter, gridded `0,30,60,90` by default -- and records the resulting
-angle in `poses.tsv` as **`O_IC_rev`**:
+angle in `poses.tsv` as **`O_IC_rev`**. (The search is stage 5 and is not yet
+exposed through `chbridge`; `poses.tsv` is its output format, which the figure
+stage already reads.)
 
 | tilt | `O_IC_rev` | |
 |---|---|---|
@@ -166,8 +250,10 @@ angle beside it rather than folding it in.
 
 | stage | reads | writes |
 |---|---|---|
+| 0 | an enzyme name or a PDB id | whether tunnels already exist, and for which entry |
 | 1 | PDB/CIF, ligand choices | prepared `<name>.pdb` per enzyme |
-| 2 | prepared PDBs | CAVER output, normalised tunnel chains |
+| 2a | prepared PDBs, a starting point | CAVER output (`summary.txt`, `data/clusters_timeless/`) |
+| 2b | CAVER output or a fetched chain | normalised tunnel chains |
 | 3 | prepared PDBs, tunnels | `<NAME>_residue_classes.tsv`, `<NAME>_hotspot_patches.tsv` |
 | 4 | the above | `<prefix>_hotspot-map.pse` |
 | 5 | the above | `poses.tsv`, `patch_pairs.tsv`, `geom<NNN>_*_complex.pdb` |

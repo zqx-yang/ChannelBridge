@@ -1,4 +1,4 @@
-# /opt/conda/envs-share/pymol-script/bin/pymol -cq run_png.py -- pse=<file> out=<png> [scene=review|base|mask|mouth|footprint] [w=2000] [h=1500] [bg=FFFFFF] [transparent=1]
+# pymol -cq run_png.py -- pse=<file> out=<png> [scene=review|base|mask|mouth|footprint] [w=2000] [h=1500] [bg=FFFFFF] [transparent=1]
 #
 # Ray-traced PNG of one scene of a session built by run_pse.py. The .pse
 # carries the style, so this only recalls a scene, switches the flat helper

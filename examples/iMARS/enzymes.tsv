@@ -1,0 +1,58 @@
+#	The 24 enzymes of the iMARS fusion set, and the structure each example uses.
+#
+#	branch		which source the tunnel comes from. "channelsdb" = the entry is
+#			annotated and its tunnels are fetched; "caver" = nothing in the PDB
+#			that matches this enzyme is annotated, so CAVER is run on the entry.
+#	entry		a HOMOLOGOUS deposited structure, not the iMARS construct itself:
+#			the paper's enzymes are plant and yeast proteins and almost none has
+#			its own crystal structure. Found by RCSB sequence search on the
+#			parent sequence, then filtered by whether ChannelsDB has it.
+#	score		RCSB sequence-search score against the iMARS parent sequence,
+#			1.0000 = top hit. Below ~0.6 the entry is a DISTANT homolog and its
+#			tunnel is evidence about the family, not about this enzyme.
+#	rank		where that entry sat in the search. ChannelsDB coverage is per
+#			ENTRY, not per protein: only 4 of the 24 rank-1 hits are annotated,
+#			and going down the ranks found 22. The rank is kept because a rank-12
+#			hit is a weaker claim than a rank-1 hit even at the same score.
+#	product		what this enzyme HANDS ON, when it is the upstream half of a pair:
+#			the channelled intermediate. Blank for an enzyme that only ever
+#			appears downstream in this set, because then nothing here consumes
+#			its product.
+#	chain		which chain of that entry to prepare. On the ChannelsDB branch
+#			this FOLLOWS THE TUNNEL: a report annotates tunnels of the whole
+#			deposited assembly, and four of these entries annotate a protomer
+#			other than chain A (ADS/BBS chain B, GPPS chain D, LIC chain B).
+#			Prepping chain A there leaves the tunnel floating 20-32 A from
+#			the protein -- geometry about a protomer no longer in the file.
+#			run_examples.py re-checks this at run time and refuses a tunnel
+#			that is not attached to the chain it prepared.
+#	start_mode	ligand   = the start point is the channel_ligand's centroid
+#			cavity   = derived from start_spec by `caver config --start-cavity`
+#			none     = not needed; the tunnels are fetched, not computed
+#	start_spec	for cavity: the residues whose site this is, as CAVER ids.
+#
+enzyme	name	product	branch	entry	chain	rank	score	resolution	channel_ligand	start_mode	start_spec	cdb_tunnels	cdb_category	note
+4'OMT	enz_4pOMT	reticuline	channelsdb	5ICE	A	2	1.0000	1.6	2H4	ligand		10	Procognate	
+4CL	enz_4CL	4-coumaroyl-CoA	channelsdb	5BSM	A	2	0.7010	2.32	ATP	ligand		27	Cofactor	adenylate-forming; the ATP site is the one annotated
+7OMT	enz_7OMT		caver	8J3G	A	1	1.0000	2.3		cavity	A:163,A:166,A:250,A:253,A:254,A:303	0		apo. Its only annotated candidate is 5ICE, which 4'OMT already uses; site transferred from 5ICE (88% id) rather than modelling two enzymes on one set of coordinates
+ADS	enz_ADS		channelsdb	3G4D	B	6	0.4116	2.403		none		11	CSA	DISTANT homolog (0.41): family-level evidence only; chain B, not A: the 11 annotated CSA tunnels are all in chain B, NONE in chain A
+AS	enz_AS		channelsdb	3S9V	A	1	1.0000	2.3		none		6	CSA	
+BAS	enz_BAS		channelsdb	1BI5	A	10	0.6722	1.56		none		12	CSA	type III PKS; shares its entry with CHS, which they never pair with
+BBS	enz_BBS		channelsdb	3G4D	B	3	0.9479	2.403		none		11	CSA	chain B, not A: same entry as ADS: the annotated tunnels are in chain B
+CHS	enz_CHS		channelsdb	1BI5	A	1	1.0000	1.56		none		12	CSA	CSD164 is the oxidised catalytic Cys; triad Cys164/His303/Asn336
+CTS	enz_CTS		channelsdb	5YLW	A	1	1.0000	1.7	HEM	ligand		12	Cofactor	P450; the haem is prosthetic, not channelled
+CUS	enz_CUS		caver	3ALE	A	1	1.0000	2.5		cavity	A:174,A:316,A:349	0		no annotated entry in 12 candidates. Triad from CHS 1BI5 (52% id); matches the published Oryza CUS numbering independently
+ERG20	enz_ERG20	FPP	channelsdb	1FPS	A	2	0.9858	2.6		none		27	CSA	
+GES	enz_GES		channelsdb	3N0F	A	2	0.9796	2.7		none		8	CSA	
+GGPPS	enz_GGPPS	GGPP	channelsdb	2E8T	A	2	1.0000	2.13	FPS	ligand		14	Procognate	
+GPPS	enz_GPPS	GPP	channelsdb	3KRF	D	4	0.9463	2.2	DST	ligand		9	Procognate	chain D, not A: 9 of the 11 annotated Procognate tunnels are in chain D, none in A
+LIC	enz_LIC		channelsdb	1N1B	B	4	0.4582	2.0		none		18	CSA	DISTANT homolog (0.46): family-level evidence only; chain B, not A: 18 annotated CSA tunnels in chain B against 4 in A
+MYS	enz_MYS		channelsdb	5UV1	A	2	1.0000	2.4	0FV	ligand		2	Procognate	only 2 tunnels annotated
+NES	enz_NES		channelsdb	3N0F	A	2	0.9618	2.7		none		8	CSA	
+OCS	enz_OCS		channelsdb	5UV1	A	3	0.9944	2.4	0FV	ligand		2	Procognate	
+RAS	enz_RAS		channelsdb	5FAL	A	11	0.5165	1.861	SKT	ligand		4	Cofactor	DISTANT homolog (0.52) found at rank 11: weak
+REPI	enz_REPI		channelsdb	1ZGD	A	2	0.5785	1.7	NAP	ligand		3	Cofactor	DISTANT homolog (0.58)
+RNMT	enz_RNMT		channelsdb	5KOK	A	3	1.0000	1.792	S9T	ligand		16	Procognate	
+SQS	enz_SQS		channelsdb	3WEF	A	12	1.0000	2.35	FPS	ligand		12	Procognate	rank 12 but score 1.0000: many near-identical entries above it
+STS	enz_STS		caver	3A5S	A	1	1.0000	1.8		cavity	A:157,A:296,A:329	0		no annotated entry in 12 candidates. Triad from CHS 1BI5 (70% id)
+TS	enz_TS		channelsdb	3P5P	A	1	1.0000	1.816	A3C	ligand		6	CSA	

@@ -1,4 +1,4 @@
-# /opt/conda/envs-share/pymol-script/bin/pymol -cq run_hotspots.py -- complex=<pdb> out=<pse>
+# pymol -cq run_hotspots.py -- complex=<pdb> out=<pse>
 #      [up_chains=B,C,D,E] [dn_chains=N] [up_name=GDH] [dn_name=FNR]
 #      [classes_up=<GDH_residue_classes.tsv>] [classes_dn=..] [patches_up=..] [patches_dn=..]
 #      [ligands=NAP,BGC,FDA,A2P] [binder_radius=11] [best_is_darkest=1]

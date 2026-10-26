@@ -151,8 +151,7 @@ produced by the same two tools.
 
 What it would cost and where it could go wrong:
 
-* 100 fusions of roughly 800 residues: a day or two of GPU on the E14
-  cluster with ColabFold or AlphaFold3.
+* 100 fusions of roughly 800 residues: a day or two of GPU time with ColabFold or AlphaFold3.
 * **Their CAVER settings are not published.** Probe radius, shell radius,
   shell depth and clustering threshold are all absent. A mismatch there
   changes the sphere chain, which is exactly the sensitivity we measured.
@@ -194,7 +193,7 @@ The outcome is informative either way:
   on its own.
 
 Note this fusion sits at D_IC 17.4 Å, which is both their validated floor and
-almost exactly where the P6 best pose sits (17.0 Å) — so it is the single most
+almost exactly where this project's best pose sits (17.0 Å) — so it is the single most
 relevant point in their entire dataset for our purposes.
 
 ### Route C — what cannot be done
@@ -210,13 +209,14 @@ Three deliberate deviations, each recorded so a reviewer can see them.
 
 **The O_IC arm.** iMARS takes P1 as literally "the second-to-last sphere".
 We take it a fixed 1.0 Å of arc length inward. On a CAVER build with ~1 Å
-sphere spacing these are the same thing, and the P5 build had 0.98 Å spacing —
+sphere spacing these are the same thing, and the reference build had 0.98 Å
+spacing —
 so this reproduces their intent. On the 0.17 Å-spacing build available here,
 taking the literal second-to-last sphere would measure the angle over a
 0.26 Å baseline. See [caver-builds.md](caver-builds.md).
 
-**Channel selection.** iMARS always takes CAVER's top-ranked cluster. The P5
-work chose the FNR channel empirically (cluster 2, burial 18, over cluster 1,
+**Channel selection.** iMARS always takes CAVER's top-ranked cluster. The
+reference run of the worked example chose the FNR channel empirically (cluster 2, burial 18, over cluster 1,
 burial 37) because it scored better in the pose search. That is a departure
 from the published method and should be stated in any methods text. The pair
 file records the choice explicitly.
@@ -224,7 +224,7 @@ file records the choice explicitly.
 **Extrapolation range.** The DO regression was fitted on fusion proteins whose
 channel exits were **45–91 Å** apart and validated against yields down to
 **17.4 Å**. A binder-held pair can be much closer: our pose grid runs 6–36 Å,
-and the P6 best pose sits at 17.0 Å — just below the validated floor. DO is a
+and the worked example's best pose sits at 17.0 Å — just below the validated floor. DO is a
 linear fit with no support below that; it keeps rising as D_IC falls, which is
 an assumption rather than a measurement. `extrapolation_note()` flags it, and
 a methods section should quote the fitted range alongside any DO.

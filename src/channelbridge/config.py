@@ -101,6 +101,12 @@ class CaverSpec:
 
     exclude: List[str] = field(default_factory=lambda: ["HOH", "WAT"])
     start: Optional[Tuple[float, float, float]] = None
+    #: CAVER residue identifiers for the starting point ("128", "B:146").
+    #: Combines with `start` rather than overriding it; one of the two is
+    #: required. Use this when no ligand marks the site.
+    start_residues: List[str] = field(default_factory=list)
+    #: PDB atom serial numbers for the starting point. Also combines.
+    start_atoms: List[int] = field(default_factory=list)
     probe_radius: float = 1.4
     shell_depth: float = 6.0
     clustering_threshold: float = 3.5
@@ -113,6 +119,8 @@ class CaverSpec:
     _ALLOWED = (
         "exclude",
         "start",
+        "start_residues",
+        "start_atoms",
         "probe_radius",
         "shell_depth",
         "clustering_threshold",
@@ -138,6 +146,9 @@ class CaverSpec:
         spec = cls(
             exclude=[s.strip().upper() for s in _as_str_list(where + ".exclude", raw.get("exclude", ["HOH", "WAT"]))],
             start=start,
+            start_residues=[s.strip() for s in
+                            _as_str_list(where + ".start_residues", raw.get("start_residues"))],
+            start_atoms=[int(v) for v in (raw.get("start_atoms") or [])],
             probe_radius=float(raw.get("probe_radius", 1.4)),
             shell_depth=float(raw.get("shell_depth", 6.0)),
             clustering_threshold=float(raw.get("clustering_threshold", 3.5)),

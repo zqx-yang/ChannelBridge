@@ -21,9 +21,9 @@ colour would be absurd.
 Building and rendering are separate for the same reason one step down:
 
 ```
-chbridge session <output-dir> --pse rank1 --prefix p6a      # -> p6a_geom001_render.pse
+chbridge session <output-dir> --pse rank1 --prefix run1      # -> run1_geom001_render.pse
 # open it, rotate to the frame you want, save it, then:
-chbridge render p6a_geom001_render.pse --prefix p6a --variant both \
+chbridge render run1_geom001_render.pse --prefix run1 --variant both \
     --dic 17.0 --oic 165.0 --do 0.850
 ```
 
@@ -103,20 +103,18 @@ it — the "monomer" scene holds two chains. Both old spellings are still
 accepted on the command line.
 
 The helper scenes exist **twice** because the two variants are framed
-differently. The first assembly SVG traced its overlay from the pair-framed
-helpers, which put the channel outline and the D_IC/O_IC lines off the
-proteins entirely; the objects had not moved at all (chains identical to
-0.000 Å) — only the camera the helpers were rendered with.
+differently, and an overlay traced from the wrong variant's helpers lands off
+the proteins entirely even though nothing in the scene has moved. An SVG must
+be built on the helpers of its own camera.
 
 There is no cross-section scene. One was built and dropped: it was not
 meaningfully different from `render_pair`, which already shows the tunnels and
 the relative positions, and the cut copy coloured part of the downstream
 ligand black. The cutting geometry stays in `render/cut.py`, tested on its own.
 
-Ligands appear in **every** render scene. One bug here is worth naming because
-it never showed up as an error: the assembly object only ever had
-`show surface` for polymer, so the assembly render silently lost every
-cofactor.
+Ligands appear in **every** render scene, assembly scenes included. A surface
+shown for polymer only silently drops every cofactor from the picture — no
+error, just a wrong figure — so the ligands are added explicitly per scene.
 
 The `base_*` scenes exist for one reason: **an SVG is assembled on them, not
 on the matching `render_*` scene.** The render scenes carry the channel as a
@@ -130,13 +128,13 @@ A pose session carries **no classification scene** by default. It answers
 hotspot map, which is built once per pair and shows every patch. Pass
 `classes=1` to put it back.
 
-Three things here were learned the hard way:
+Three things worth knowing about what is drawn:
 
 * **The drawn channel wraps the channelled ligand.** A CAVER sphere chain
   starts at the starting point and runs *outward*, so on its own it leaves
   the cofactor sitting outside the red volume — but the ligand is *in* the
   channel. The drawn volume is the chain unioned with that enzyme's
-  channelled species wrapped at `ligand_wrap` (3 Å), as p5c does. Only the
+  channelled species wrapped at `ligand_wrap` (3 Å). Only the
   channelled species: wrapping every cofactor would paint red over prosthetic
   groups the channel never reaches (for GDH–FNR, NAP and A2P are wrapped;
   the prosthetic FAD is not).
@@ -148,16 +146,15 @@ Three things here were learned the hard way:
   identical; if wrapping ever moved an exit, every measurement in the project
   would shift silently.
 
-* **The inspection scenes are translucent, not solid.** They were solid at
-  first, on the reasoning that an inspection scene should show the surface
-  plainly. It hid the cofactors — and a hotspot patch only means anything
-  next to the ligand the channel serves. They are now `transparency.inspect`
-  (0.55), less see-through than the render scenes but not opaque.
+* **The inspection scenes are translucent, not solid.** A solid surface reads
+  plainly but hides the cofactors, and a hotspot patch only means anything
+  next to the ligand the channel serves. They use `transparency.inspect`
+  (0.55): less see-through than the render scenes, but not opaque.
 * **`occupancy` draws one capsule per upstream protomer**, paired to the
   nearest downstream copy, because the only reason the scene exists is to
   show whether neighbouring binders collide. A single capsule cannot answer
   that. The scene reports the closest axis-to-axis distance; capsules of
-  radius 11 Å touch below 22 Å. On the p6a GDH–FNR pose it reports 30.8 Å
+  radius 11 Å touch below 22 Å. On the worked GDH–FNR pose it reports 30.8 Å
   against the pose scan's own `binder_binder` of 30.9 Å — an independent
   cross-check of the search's clash test.
 
@@ -251,7 +248,7 @@ before committing to a search over them ([pipeline.md](pipeline.md)). It
 therefore takes the two prepared enzymes and their tunnels, not a pose:
 
 ```
-chbridge hotspots --prefix p6a \
+chbridge hotspots --prefix run1 \
     --up-pdb GDH.pdb --dn-pdb FNR.pdb \
     --tunnel-up GDH_cl1_norm.pdb --tunnel-dn FNR_cl2_norm.pdb \
     --up-name GDH --dn-name FNR --ligands NAP,BGC,FDA,A2P \
@@ -259,10 +256,10 @@ chbridge hotspots --prefix p6a \
     --classes-dn FNR_residue_classes.tsv --patches-dn FNR_hotspot_patches.tsv
 ```
 
-With no `--out` that writes `p6a_hotspot-map.pse`.
+With no `--out` that writes `run1_hotspot-map.pse`.
 
 The relative position is computed here — the smallest clash-free D_IC at
-O_IC 180°, which is the highest-DO geometry the pair can reach. On the p6a
+O_IC 180°, which is the highest-DO geometry the pair can reach. On the worked
 GDH–FNR pair: **D_IC 9.0 Å, O_IC 180°, DO 0.9314**, closest approach 3.38 Å.
 Pass `--complex` instead to use a pose that already exists.
 
@@ -272,29 +269,28 @@ Four choices distinguish it from a pose session:
   two surface colours for one class would read as two classes.
 * **Every element is its own object**, so any of them can be switched off: one
   per residue class per enzyme, one per patch, plus ligands, mouths, tunnels
-  and envelopes. The p5d original colours the classes in place on one surface
-  and keeps 31 named *selections* beside it. A selection can be picked but not
-  hidden, so with seven translucent classes on one object every colour is seen
-  through every colour behind it and nothing can be isolated — which is what
-  made the first versions of this session unreadable. The classes make the
-  split clean because they **partition** the residues: the union of the
-  per-class objects is the whole surface with nothing left over (checked on
-  p6a — GDH 7 objects = 7,884 atoms, FNR 6 = 2,352, 0 unclassified). The
-  patches are solid objects over the translucent base, never painted into
-  it: a tinted base means switching a patch off changes nothing on screen.
+  and envelopes. The obvious alternative — colour the classes in place on one
+  surface and keep a named *selection* per class beside it — does not work: a
+  selection can be picked but not hidden, so with seven translucent classes on
+  one object every colour is seen through every colour behind it and nothing
+  can be isolated. The classes make the split clean because they **partition**
+  the residues: the union of the per-class objects is the whole surface with
+  nothing left over (on the worked example, GDH 7 objects = 7,884 atoms,
+  FNR 6 = 2,352, 0 unclassified). The patches are solid objects over the
+  translucent base, never painted into it: a tinted base means switching a
+  patch off changes nothing on screen.
 * **The patches are shades of one hue.** Labels are built but start OFF:
   ten names on two crowded faces cannot all be placed beside the patch they
-  name, and every patch is its own object (`<name>_patch_01`, and its
-  envelope `<name>_patch_01_binder`), so the object list is the legend. A rank is an ordering,
-  not a set of unrelated categories. `patch_01` is palest and the last rank
+  name, and every patch is its own object (`<name>_patch_01`, and its envelope
+  `<name>_patch_01_binder`), so the object list is the legend. A rank is an
+  ordering, not a set of unrelated categories. `patch_01` is palest and the last rank
   deepest by default (`best_is_darkest: true` flips it). Shades are mixed with
   white rather than scaled to black: a dark red and a dark grey are hard to
   tell apart on a shaded surface, a pale red still reads as red.
 * **Every patch carries a minimum binder, on every protomer.** The envelope
   object holds one blob chain per copy of the enzyme, so the assembly scene
   answers whether binders on neighbouring protomers would collide — which is
-  what it is for. It used to place one, taken from a `resi -> coord` map
-  where residue numbers collide across chains and one protomer silently won. Not a sphere: the same chain of
+  what it is for; a single envelope cannot. Not a sphere: the same chain of
   spheres every 2 Å that the pose session draws, spanning the pose stage's own
   `binder_gap` (6 Å) — four blobs — pointing out along the patch's *local*
   surface normal. So the figure shows how far and which way a binder would
@@ -310,8 +306,8 @@ nearer. It also makes the label handling work: see below.
   anisotropically -- a line of text is far wider than it is tall, so two
   labels at the same height need much more room than two stacked vertically.
   The relaxation is bounded by the drawn pair plus a margin, because without
-  bounds it trades an overlap for a label out in the frame's margin, which is
-  what happened to `FNR p05`.
+  bounds it trades an overlap for a label stranded out in the frame's
+  margin.
 * *In depth.* A label sits at its own anchor's depth, so one naming a patch on
   the far side of an enzyme renders **behind** the near surface and washes out
   to unreadable. The in-plane relaxation cannot fix that -- it deliberately
@@ -329,13 +325,6 @@ and one label ended up over the *other* enzyme.
 What remains: with six patches crowded on one face, separation can still put
 a label in open space rather than beside its patch. A leader line is the
 honest fix and is not implemented.
-
-Transparency is **one** thing: a translucent whole-enzyme base per enzyme,
-with every element — each residue class, each patch — a solid object on top
-of it. That is what makes toggling work: switch a patch on and it reads as
-"this, here, on this surface". The base is never tinted with the patch
-colours; it was, so that the scene still read with the patches hidden, which
-meant switching a patch off changed nothing on screen.
 
 Patch surfaces use a slightly larger probe (1.7 Å against PyMOL's 1.4) so
 they sit just outside the coincident class surface beneath them and always
@@ -359,7 +348,7 @@ There is no separate `patches` or `envelopes` scene. Those were this scene
 with objects switched off, which is a toggle, not a scene; what a scene
 stores that an object cannot is the camera.
 
-Default class colours follow the p5d map script:
+Default class colours:
 
 | class | colour | |
 |---|---|---|

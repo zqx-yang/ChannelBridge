@@ -150,3 +150,60 @@ class TestOicIsOneSided:
         # move P3 sideways and the angle falls, because the DONOR now misses
         p3b = np.array([0.0, 17.0, 0.0])
         assert abs(o_ic(p1, p2, p3b) - 90.0) < 1e-6
+
+
+class TestYourOwnScore:
+    """The published DO is the default, not the only option.
+
+    Coefficients were always replaceable. EXTRA TERMS were not, which left
+    no way to score on anything the published fit ignores -- and it ignores
+    the acceptor's orientation entirely (see TestOicIsOneSided).
+    """
+
+    def _mine(self):
+        from channelbridge.geometry import DOCoefficients
+
+        return DOCoefficients(-0.0079, 0.0012, 0.7865, name="DO+acceptor",
+                              extra={"o_ic_rev": 0.0012})
+
+    def test_the_default_is_the_published_score(self):
+        from channelbridge.geometry import DO_PUBLISHED, do_score
+
+        assert DO_PUBLISHED.is_published
+        assert do_score(17.0, 165.0) == pytest.approx(0.8502, abs=5e-5)
+
+    def test_an_extra_term_is_applied(self):
+        from channelbridge.geometry import do_score
+
+        m = self._mine()
+        facing = do_score(17.0, 165.0, m, o_ic_rev=180.0)
+        sideways = do_score(17.0, 165.0, m, o_ic_rev=90.0)
+        assert facing > sideways, "an acceptor facing the donor should score higher"
+        assert facing - sideways == pytest.approx(0.0012 * 90.0)
+
+    def test_adding_a_term_means_it_is_no_longer_iMARS(self):
+        # the flag exists so a four-term number cannot be reported as "DO"
+        # without someone having to notice
+        assert not self._mine().is_published
+
+    def test_it_says_which_features_it_needs(self):
+        assert self._mine().features == ("o_ic_rev",)
+
+    def test_a_missing_feature_is_refused_not_defaulted(self):
+        from channelbridge.geometry import do_score
+
+        with pytest.raises(KeyError, match="o_ic_rev"):
+            do_score(17.0, 165.0, self._mine())
+
+    def test_features_on_a_two_term_set_are_refused(self):
+        # silently ignoring them would let someone believe a term was applied
+        from channelbridge.geometry import do_score
+
+        with pytest.raises(TypeError, match="two-term"):
+            do_score(17.0, 165.0, o_ic_rev=180.0)
+
+    def test_the_published_sets_are_unchanged_by_all_this(self):
+        from channelbridge.geometry import DO_EXACT, DO_PUBLISHED
+
+        for c in (DO_PUBLISHED, DO_EXACT):
+            assert c.extra == {} and c.is_published

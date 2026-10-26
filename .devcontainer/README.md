@@ -35,7 +35,7 @@ Then open a terminal in the container and run `claude` to sign in.
 | Claude Code | the official dev container feature | |
 
 `CHBRIDGE_PYMOL` is set to `/usr/bin/pymol`. The tool resolves PyMOL in the
-order `CHBRIDGE_PYMOL` → `pymol` on `PATH` → the author's cluster path, so on
+order `CHBRIDGE_PYMOL` → `pymol` on `PATH` → a hard-coded fallback path, so on
 a host with its own PyMOL you only need to set that one variable.
 
 ## CAVER is not in the image, and cannot be
@@ -72,11 +72,12 @@ cluster. The PyMOL-dependent code is checked by its own selftests rather than
 by pytest, because it must run inside PyMOL's interpreter:
 
 ```bash
-pymol -cq src/channelbridge/render/run_pse.py -- --selftest
+pymol -cq src/channelbridge/render/run_pse.py      -- --selftest
 pymol -cq src/channelbridge/render/run_hotspots.py -- --selftest
+pymol -cq src/channelbridge/render/run_patches.py  -- --selftest
 ```
 
-Judge those by the printed `PASS`/`FAILED` marker, not the exit code: PyMOL
+Judge those by the printed `PASSED`/`FAILED` marker, not the exit code: PyMOL
 is prone to segfaulting during interpreter teardown after the test has
 already finished. Run them with `PYTHONUNBUFFERED=1` or the marker can be
 lost in the buffer when that happens.

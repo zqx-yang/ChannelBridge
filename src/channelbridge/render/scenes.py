@@ -2,7 +2,7 @@
 
 Run under PyMOL, which is where ``cmd`` exists::
 
-    PYTHONPATH=<repo>/src /opt/conda/envs-share/pymol-script/bin/pymol -cq \
+    PYTHONPATH=<repo>/src pymol -cq \
         -m channelbridge.render.scenes -- \
         complex=geom001_..._complex.pdb \
         tunnel_up=.../tun_cl_001.pdb tunnel_dn=.../tun_cl_002.pdb \
@@ -86,7 +86,7 @@ def _cmd():
     except ImportError:  # pragma: no cover - depends on the interpreter
         raise SystemExit(
             "this module needs PyMOL. Run it as:\n"
-            "  PYTHONPATH=<repo>/src /opt/conda/envs-share/pymol-script/bin/pymol "
+            "  PYTHONPATH=<repo>/src pymol "
             "-cq -m channelbridge.render.scenes -- <args>"
         ) from None
     return cmd

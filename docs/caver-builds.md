@@ -19,12 +19,13 @@ Same structure file, byte-identical config, same seed. Two CAVER builds.
 | clusters kept | 3 | 9 |
 | `FNR_primary` negative control | no tunnels | 2 clusters |
 
-Build B is **CAVER 3.03 BETA**, downloaded from
-<https://www.caver.cz/index.php?sid=199> and installed at
-`/home/programs/caver_3.0.3/caver` (jar built 2016-04-24), run under Java 21.
+Build B is **CAVER 3.03 BETA** from [caver.cz](https://caver.cz/) (jar built
+2016-04-24), run under Java 21.
 
-Build A is whichever build produced the P5 acceptance table, on Windows. Its
-exact version is not recorded. It is **older** than build B and behaves like a
+Build A is the build that produced this project's earlier reference
+measurements, on Windows. **Its exact version was not recorded** — which is
+itself the first lesson of this document: record the CAVER version beside
+every tunnel measurement. It is **older** than build B and behaves like a
 stable release: SBGrid's CAVER listing offers 3.0.1 and 3.0.2.
 
 Two independent signs that build B is the newer:
@@ -215,7 +216,7 @@ which should be propagated into DO rather than ignored.
 Run end to end on build B, the whole pose search picks a different answer from
 the raw chain and build A's answer from the normalised chain.
 
-| | build A (P5 record) | build B, normalised | build B, raw |
+| | build A (reference) | build B, normalised | build B, raw |
 |---|---|---|---|
 | best pose DO | 0.8401 | **0.8502** | 0.8695 |
 | D_IC | 16.0 A | **17.0 A** | 10.0 A |

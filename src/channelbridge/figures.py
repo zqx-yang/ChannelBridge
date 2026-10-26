@@ -79,12 +79,16 @@ __all__ = [
     "svg_name",
 ]
 
-#: Where to find PyMOL, in order: the ``CHBRIDGE_PYMOL`` environment variable,
-#: whatever ``pymol`` is on PATH, then the path it lives at on the cluster this
-#: was developed on. Hard-coding that last path alone made the tool unusable
-#: anywhere else -- including inside its own dev container, where PyMOL comes
-#: from the distribution and lands in /usr/bin.
-_CLUSTER_PYMOL = "/opt/conda/envs-share/pymol-script/bin/pymol"
+#: Where to find PyMOL, in order: the ``CHBRIDGE_PYMOL`` environment
+#: variable, then whatever ``pymol`` is on PATH, then the bare name so the
+#: failure comes from the shell with a message a user can act on.
+#:
+#: There is deliberately no hard-coded fallback path. An earlier version
+#: ended with one developer's cluster path, which made the tool unusable
+#: anywhere else -- including inside its own dev container, where PyMOL
+#: comes from the distribution and lands in /usr/bin. If PyMOL is somewhere
+#: unusual, say so with CHBRIDGE_PYMOL.
+_FALLBACK_PYMOL = "pymol"
 
 
 def default_pymol() -> str:
@@ -94,7 +98,7 @@ def default_pymol() -> str:
     found = shutil.which("pymol")
     if found:
         return found
-    return _CLUSTER_PYMOL
+    return _FALLBACK_PYMOL
 
 
 #: Kept as a module constant for callers that want it eagerly; prefer

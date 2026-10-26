@@ -1,10 +1,45 @@
 # Pitfalls
 
-Things that cost days on the P5 prototype. Each one is either guarded by code
-in this package or, where it is outside the package, stated here so it is not
-rediscovered.
+Failure modes this pipeline has hit, each one either guarded by code in this
+package or -- where the cause lies in a tool outside it -- stated here so it is
+not rediscovered. They are rules, not anecdotes: everything below changes what
+a user should do.
 
 ## CAVER
+
+**Launch it with `-jar`, and pass `-home`.** The entry point is named in
+the jar's own manifest (`caver.ui.Launcher`); there is no `CaverRunner` class
+to put on a classpath. `-home <the caver directory>` is not optional either,
+because CAVER reads `bin/atom_radii.csv` relative to it. The working command
+is `java -Xmx6g -jar caver.jar -home <dir> -pdb <dir> -conf <f> -out <dir>`.
+
+**A single structure writes `data/clusters_timeless/`, not `data/clusters/`.**
+The name follows whether the run had a time dimension, and the files carry a
+trailing snapshot index (`tun_cl_001_1.pdb`, not `tun_cl_001.pdb`). Code that
+looks only in `clusters/` reports every static run as having found nothing --
+which is indistinguishable from a bad starting point.
+
+**There is no default starting point and no complaint about missing one.**
+At least one of `starting_point_coordinates`, `starting_point_residue` and
+`starting_point_atom` is required; they COMBINE as an equally-weighted centre
+of gravity rather than overriding each other. `write_config` refuses to write
+a config without one.
+
+**`starting_point_residue` averages whole residues, which can land inside an
+atom.** A catalytic triad's residues face each other, so their centre of
+gravity is in the middle of the side chains: 0.61 A from the nearest atom
+centre for stilbene synthase (3A5S) and 0.49 A for curcuminoid synthase
+(3ALE). CAVER looks for a Voronoi vertex within `max_distance` (3 A), fails,
+and reports **zero tunnels** -- at probe 0.9 and 1.4 and at shell radius 3, 5
+and 10, with nothing in the log about the starting point. Use
+`chbridge caver config --start-cavity` to move the point into the pocket
+first; 3.7 A and 4.0 A respectively, and both then give four clusters.
+
+**A start point from lining residues is not interchangeable with one from a
+ligand.** On GDH the two sit 4.05 A apart and that swapped clusters 1 and 2,
+which were tied at priority 0.773. The route survived -- cluster 2 of the
+second run exits 0.00 A from cluster 1 of the first -- but the "top tunnel"
+exit moved 10.02 A, worth 0.08 in DO. Record which you used.
 
 **`-pdb` must be a directory, never a file.** Handing it a file makes Java's
 `File.listFiles()` return null and CAVER dies with a bare
@@ -35,7 +70,8 @@ relocated start point on 3.01 and later. Check clearance first; see
 **A zero-tunnel run is a legitimate outcome**, not a failure: a probe of
 2.5 A on a route that needs the protein to move finds nothing, and that is a
 result. A runner must not abort the remaining runs when `data/clusters/` is
-absent. The P5 `run_caver_all.sh` did, under `set -euo pipefail`.
+absent -- a sweep runner written under `set -euo pipefail` will, and loses
+the remaining structures.
 
 **Burial must be counted against the atoms CAVER actually searched** -- the
 input minus `exclude_residue_names`. Counting a cofactor CAVER never saw
@@ -59,6 +95,55 @@ when the shell parameters change.
 spheres lie within ~4 A of the excluded cofactor (the genuine-channel test),
 then choose between survivors empirically.
 
+## ChannelsDB
+
+**`Distance` is not the same quantity in the two methods.** In MOLE entries
+it is cumulative arc length, as you would expect. In the CAVER-derived
+entries it is non-monotonic and saturates near 1 -- a per-step or normalised
+value. Reading `Distance[-1]` as a length therefore reported every
+CAVER-derived tunnel as about 1 A long, which is plausible enough that
+nothing contradicted it; the symptom was a selection rule preferring
+two-sphere "tunnels" over real ones. `DbTunnel.length` measures the
+coordinates, and `DbTunnel.distance_is_arc_length` says whether the reported
+series can be used.
+
+**A fetched chain often stops before the surface.** The database truncates by
+its own surface definition, not this package's. Of the 31 database-branch
+enzyme sides in `examples/iMARS`, only 10 have a candidate chain whose ends
+fall below burial 15; on 5ICE every Procognate chain has a minimum burial of
+29-71 atoms along its whole length. D_IC and O_IC are both measured at the
+mouth, so check the verdict (`mouth` usable; `buried`, `recessed`, `surface`
+not) before quoting geometry from a fetched tunnel.
+
+**What to do about it: seed CAVER from it, do not measure it.** The database
+identifies the route (its category says what the route is FOR, which CAVER
+cannot) and CAVER produces a chain that reaches solvent (which the database
+does not). Run CAVER from the database chain's buried end, then check the
+result back against that chain. Two cautions from doing it over 13 enzymes:
+seed from the chain END, not from a bound ligand -- seeding from the ligand
+first dropped annotation agreement from 6 enzymes to 2, because CAVER then
+finds whatever leaves the ligand site; and judge the check with
+`Match.recovery()`, not `Match.verdict()`, because your chain is longer by
+design and the exit-led verdict calls a recovered route "different tunnel".
+
+**A fetched tunnel may belong to a different protomer.** A report annotates
+the whole deposited assembly and never says which chain each tunnel is in.
+Prepping chain A of 3KRF and taking its best Procognate tunnel gave a chain
+32 A from the protein at BOTH ends: correct coordinates, in a frame whose
+protein had been deleted. It passes a "does it leave the protein" test
+trivially. Check that a fetched chain comes within a few angstroms of the
+chain you kept, and if it does not, prepare the chain the annotation is for.
+
+**Coverage is per entry, not per protein.** Only 4 of 24 rank-1 sequence-
+search hits in the iMARS set are annotated; going down to rank 12 found 22.
+Search the enzyme, then pick an annotated entry -- but note that a rank-11
+hit is a weaker claim than a rank-1 hit at the same score.
+
+**Two tunnels can share an entry across "different" enzymes.** 4'OMT and
+7OMT in the iMARS set have the same single annotated candidate. Putting both
+on it would have modelled two enzymes on one set of coordinates, which looks
+like two measurements and is one.
+
 ## Geometry
 
 **O_IC is one-sided.** It is measured at the upstream exit only, so
@@ -81,9 +166,10 @@ pose is outside the range the fit was made on.
 
 ## PyMOL (the prep and pose stages)
 
-**`iterate` has no builtins** in its namespace; the prototype scripts carry
-`_ns`/`_iterate`/`_iterate_state`/`_alter` shims and a
-`check_expression_portability()` check.
+**`iterate` has no builtins** in its namespace, so an expression that works in
+a normal interpreter can fail there. Supply the names you use explicitly (a
+`_ns`/`_iterate`/`_iterate_state`/`_alter` shim) and check an expression before
+relying on it.
 
 **`cmd.centerofmass()` fails on pseudoatoms** (element PS). Use
 `cmd.get_coords().mean(axis=0)`.
@@ -91,8 +177,8 @@ pose is outside the range the fit was made on.
 **`index` is renumbered after every `remove`.** Build the whole selection
 first.
 
-**PyMOL 3.1 segfaults on interpreter shutdown** in headless mode on this
-cluster, *after* a script has finished and printed its result. A driver that
+**PyMOL segfaults on interpreter shutdown** in headless mode (seen on 3.1),
+*after* a script has finished and printed its result. A driver that
 reads the exit code will see 139 and call a passing self-test a failure. Judge
 by the script's own output marker, and use line-buffered output
 (`stdbuf -oL`) or the marker is lost in the buffer when the process dies.
@@ -121,13 +207,13 @@ the target costs about 0.25x.
 
 ## A CAVER tunnel is too dense to hand straight to CaverDock
 
-Our cluster's CAVER build emits sphere chains at **~0.17 Å spacing** (185
-spheres over 31.7 Å on a typical cluster). CaverDock's own example tunnel is
-13 spheres at **0.956 Å** — about six times coarser.
+A current CAVER build emits sphere chains at **~0.17 Å spacing** (185 spheres
+over 31.7 Å on a typical cluster). CaverDock's own example tunnel is 13 spheres
+at **0.956 Å** — about six times coarser.
 
 Feed the raw chain to CaverDock's `discretizer` and it produces **2 disks from
 95 spheres**. The job then **completes normally and prints plausible energies**
-(−8.2 / −7.5 kcal/mol in the case we hit), because the job wrapper only checks
+(−8.2 / −7.5 kcal/mol in one observed case), because the job wrapper only checks
 that the `.dsd` file is non-empty. Nothing in the exit code, the log, or the
 presence of output files reveals that the trajectory is meaningless.
 
@@ -163,39 +249,27 @@ falls back to geometry-based bond inference. Docking energies depend on the atom
 typing that follows, so record which route each ligand took and discount the
 fallbacks rather than treating all the numbers alike.
 
-## Output-file age is not a liveness signal for a wrapped job
+## Ranking tunnels with CaverDock: cost is driven by the search
 
-The house stall rule is "log idle 30 min **and** no new output → investigate".
-Applied to CaverDock it is wrong in both directions, and following it would
-have meant cancelling six healthy multi-hour jobs.
+Runtime is set by the upper-bound search, not by the size of the input.
+Measured over six runs on one project, elapsed time spanned **19x** (under
+6 min to nearly 2 h) and the slowest run was on the **shortest** tunnel in the
+set. Neither tunnel length, disk count nor ligand size predicted it.
 
-* **CaverDock writes nothing during the smoothed upper-bound phase**, which is
-  ~86 % of a run (one measured run: LB 11 min, UB 1 h 37 min). Output can sit
-  untouched for a long time while the job is perfectly healthy.
-* **The job wrapper rsyncs results every 30 s**, so the output directory's
-  mtime tracks the *syncer*, not the tool. It can look seconds-fresh while the
-  tool is producing nothing at all.
+So **do not price a batch from a median**. Report the distribution and size the
+batch from the tail. Cost rises steeply with ligand flexibility rather than
+with ligand size, so price the most flexible ligand in the set first.
 
-So the directory's timestamp is decoupled from progress in both directions.
-**Judge liveness from the mirrored log only**, which shows the search
-advancing (`cScheduler::step(): conformations computed: …`).
-
-This generalises to any tool run behind a wrapper that syncs on a timer: the
-sync makes "recent output" meaningless, and a long internal phase makes
-"no recent output" meaningless.
-
-## Cost is driven by the search, not by the size of the input
-
-Measured over six CaverDock runs: 5:41, 9:33, 10:57, 19:37, 47:50 and
-**1:48:14**. The 1 h 48 outlier was the **shortest** tunnel in the set
-(16.3 Å, 57 disks, a 20-heavy-atom ligand). Neither tunnel length, disk count
-nor ligand size predicts runtime; the upper-bound search does.
-
-Quoting a single "~20 min per run" from the median hides a 19× spread. Report
-the distribution, and size a batch from the tail rather than the middle.
-
-`--final_state LB` stops after the lower bound and is ~8× cheaper, but the
+`--final_state LB` stops after the lower bound and is ~8x cheaper, but the
 lower bound optimises each disk independently, so **its maximum is not a
-barrier the ligand must continuously cross** — which is the quantity one would
-be ranking tunnels by. Reasonable as a cheap pre-filter over many tunnels;
-not a substitute for the upper bound in a result.
+barrier the ligand must continuously cross** -- which is the quantity one would
+be ranking tunnels by. Reasonable as a cheap pre-filter over many tunnels; not
+a substitute for the upper bound in a result.
+
+**Output-file age is not a liveness signal.** CaverDock writes nothing for the
+whole smoothed upper-bound phase, which is the great majority of a run, so a
+healthy job can look stalled for hours. If it runs behind a wrapper that
+mirrors results on a timer, the output directory also looks fresh when the tool
+is producing nothing. Judge progress from the tool's own log
+(`cScheduler::step(): conformations computed: ...`), never from file
+timestamps.

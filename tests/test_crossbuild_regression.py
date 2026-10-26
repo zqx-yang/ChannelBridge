@@ -21,32 +21,25 @@ import pytest
 from channelbridge.io.pdb import read_pdb
 from channelbridge.tunnel import BURIAL_SURFACE_MIN, Tunnel
 
-P5_ROOT = Path(
-    os.environ.get(
-        "CHANNELBRIDGE_REF_P5",
-        "/home/hyyang/projects/P5_BBD/p5d/input-prep/caver/output",
-    )
-)
-P6_ROOT = Path(
-    os.environ.get(
-        "CHANNELBRIDGE_REF_P6",
-        "/home/hyyang/projects/P6_CBD/p6a/input-prep/caver/output",
-    )
-)
-STRUCTURE = Path(
-    os.environ.get(
-        "CHANNELBRIDGE_REF_STRUCTURE",
-        "/home/hyyang/projects/P6_CBD/p6a/input-prep/caver/in/GDH/p5d_t1_GDH_BGC-NAP.pdb",
-    )
-)
+# The reference CAVER outputs this regression compares. They are two runs of
+# the same tunnel by two different CAVER builds, and they are not in the
+# repository: they are large, and one of them was produced on a machine that
+# no longer exists. Point the environment variables at your own pair to run
+# this; without them the whole module skips, which is what a clean clone does.
+#
+# No default path: a default would be one developer's home directory, which
+# is both useless to everyone else and an odd thing to publish.
+REF_A = Path(os.environ.get("CHANNELBRIDGE_REF_A", ""))
+REF_B = Path(os.environ.get("CHANNELBRIDGE_REF_B", ""))
+STRUCTURE = Path(os.environ.get("CHANNELBRIDGE_REF_STRUCTURE", ""))
 
-# The GDH primary route at shell_radius 14, cluster 1: the tunnel the P5
-# acceptance table is built on. Excluded in that config: HOH WAT BGC NAP.
+# The GDH primary route at shell_radius 14, cluster 1: the tunnel this
+# project's reference measurements are built on. Excluded in that config: HOH WAT BGC NAP.
 TUN = "out_GDH_primary_sr14/data/clusters/tun_cl_001.pdb"
 EXCLUDED = ("HOH", "WAT", "BGC", "NAP")
 
 needs_refs = pytest.mark.skipif(
-    not ((P5_ROOT / TUN).is_file() and (P6_ROOT / TUN).is_file() and STRUCTURE.is_file()),
+    not ((REF_A / TUN).is_file() and (REF_B / TUN).is_file() and STRUCTURE.is_file()),
     reason="reference CAVER outputs for both builds are not available here",
 )
 
@@ -59,8 +52,8 @@ def protein():
 @pytest.fixture(scope="module")
 def raw():
     return {
-        "p5": Tunnel.from_caver_cluster(P5_ROOT / TUN),
-        "p6": Tunnel.from_caver_cluster(P6_ROOT / TUN),
+        "p5": Tunnel.from_caver_cluster(REF_A / TUN),
+        "p6": Tunnel.from_caver_cluster(REF_B / TUN),
     }
 
 

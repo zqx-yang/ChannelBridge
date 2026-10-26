@@ -35,9 +35,9 @@ examples:
       --structure caver/in/GDH/gdh.pdb --exclude HOH,WAT,BGC,NAP
   chbridge tunnel a/out_X b/out_X --structure s.pdb --exclude HOH,WAT --compare
   chbridge do --dic 16 --oic 150
-  chbridge figures out-complex_GDH_FNR --svg top3 --render both --prefix p6a
-  chbridge session out-complex_GDH_FNR --pse rank1 --prefix p6a
-  chbridge render figures/p6a_geom001_render.pse --prefix p6a --variant both
+  chbridge figures out-complex_GDH_FNR --svg top3 --render both --prefix run1
+  chbridge session out-complex_GDH_FNR --pse rank1 --prefix run1
+  chbridge render figures/run1_geom001_render.pse --prefix run1 --variant both
 """
 
 
@@ -76,25 +76,33 @@ def _find_cluster(caver_out: Path, cluster: Optional[int]) -> Path:
     """Locate a tunnel cluster PDB under a CAVER output folder."""
     if caver_out.is_file():
         return caver_out
-    d = caver_out / "data" / "clusters"
-    if not d.is_dir():
+    # CAVER names this folder by whether the run had a time dimension.
+    # "clusters" is for a trajectory; a SINGLE structure -- the only kind
+    # this pipeline runs -- gets "clusters_timeless", and its files carry a
+    # trailing snapshot index (tun_cl_001_1.pdb). Looking only in
+    # "clusters" made every static run look like a run that found nothing.
+    candidates = [caver_out / "data" / "clusters",
+                  caver_out / "data" / "clusters_timeless"]
+    d = next((c for c in candidates if c.is_dir()), None)
+    if d is None:
         raise FileNotFoundError(
-            "%s has no data/clusters/. Either CAVER found no pathway (check the "
-            "starting point is not inside an atom, and read warnings.txt -- CAVER "
-            "exits 0 either way), or this is not a CAVER output folder." % caver_out
+            "%s has neither data/clusters/ nor data/clusters_timeless/. Either "
+            "CAVER found no pathway (check the starting point is not inside an "
+            "atom, and read warnings.txt -- CAVER exits 0 either way), or this "
+            "is not a CAVER output folder." % caver_out
         )
     found = sorted(d.glob("tun_cl_*.pdb"))
     if not found:
         raise FileNotFoundError("%s holds no tun_cl_*.pdb" % d)
     if cluster is None:
         return found[0]
-    want = d / ("tun_cl_%03d.pdb" % cluster)
-    if not want.is_file():
+    want = sorted(d.glob("tun_cl_%03d*.pdb" % cluster))
+    if not want:
         raise FileNotFoundError(
-            "%s not found; this run has clusters %s"
-            % (want.name, ", ".join(p.stem.split("_")[-1] for p in found))
+            "no tun_cl_%03d*.pdb in %s; this run has clusters %s"
+            % (cluster, d, ", ".join(sorted({p.name.split("_")[2] for p in found})))
         )
-    return want
+    return want[0]
 
 
 # ------------------------------------------------------------------- validate
@@ -453,6 +461,184 @@ def cmd_render(args) -> int:
     return 0 if made else 1
 
 
+def cmd_prep(args) -> int:
+    """Stage 1: select the atoms the rest of the pipeline measures."""
+    from .prep import PrepParams, prepare, write_pdb
+
+    params = PrepParams(
+        chains=_split_csv(args.chains), keep_ligands=_split_csv(args.keep),
+        drop_ligands=_split_csv(args.drop), keep_waters=args.keep_waters,
+        keep_altlocs=args.keep_altlocs, relabel=args.relabel)
+    try:
+        atoms, report = prepare(args.structure, params)
+    except (OSError, ValueError) as exc:
+        return _fail(str(exc))
+    print(report.summary())
+    out = args.out or os.path.splitext(os.path.basename(args.structure))[0] + "_prep.pdb"
+    write_pdb(out, atoms, header=[
+        "prepared by ChannelBridge from %s" % os.path.basename(args.structure),
+        "chains %s%s" % ("+".join(report.chains_kept),
+                         " renamed to %s" % report.relabelled_to
+                         if report.relabelled_to else ""),
+        "ligands kept %s" % (", ".join(sorted(report.ligands_kept)) or "none"),
+        "coordinates are unchanged",
+    ])
+    print("wrote %s" % out)
+    return 0
+
+
+def cmd_channelsdb(args) -> int:
+    """Tunnels already computed for a deposited PDB entry."""
+    from .channelsdb import fetch, read_report, to_tunnel, tunnels
+
+    try:
+        report = (read_report(args.pdb_id) if os.path.isfile(args.pdb_id)
+                  else fetch(args.pdb_id, cache_dir=args.cache))
+    except LookupError as exc:
+        return _fail(str(exc))
+    except OSError as exc:
+        return _fail("could not reach ChannelsDB: %s" % exc)
+    found = tunnels(report, method=args.method) if args.method else tunnels(report)
+    if not found:
+        return _fail("%s is in ChannelsDB but has no tunnels in the requested "
+                     "categories" % args.pdb_id)
+    print("%d tunnel(s)" % len(found))
+    for t in found:
+        print("  %-28s length %6.1f A  bottleneck %.2f A (free %.2f)"
+              % (t.label, t.length, t.bottleneck, float(t.free_radii.min())))
+    print()
+    print("Categories say what a tunnel leads to: Procognate = the cognate")
+    print("ligand site (usually the substrate channel), Cofactor = a bound")
+    print("cofactor -- which is the relevant one when the shuttled species IS")
+    print("the cofactor, as for a dehydrogenase/reductase pair.")
+    print("No energetics here: ChannelsDB stores geometry, not CaverDock profiles.")
+    if args.validate:
+        missing = [k for k in ("structure", "template") if not getattr(args, k)]
+        if missing:
+            return _fail("--validate also needs --%s" % " and --".join(missing))
+        from .figures import Runner
+
+        runner = Runner(pymol=args.pymol, dry_run=False)
+        passthrough = ["ours=%s" % args.validate, "structure=%s" % args.structure,
+                       "template=%s" % args.template,
+                       "report=%s" % (args.pdb_id if os.path.isfile(args.pdb_id)
+                                      else _cached_report(args, report)),
+                       "method=%s" % args.align_method]
+        for key, value in (("select", args.align_select),
+                           ("template_select", args.template_select)):
+            if value:
+                passthrough.append("%s=%s" % (key, value))
+        return runner.run(runner.script("run_validate.py"), passthrough)
+
+    if args.write:
+        os.makedirs(args.write, exist_ok=True)
+        for t in found:
+            dst = os.path.join(args.write, "%s_%s.pdb" % (args.pdb_id.lower(), t.label))
+            to_tunnel(t).write_caver_pdb(dst)
+            print("  wrote %s" % dst)
+    return 0
+
+
+def _cached_report(args, report):
+    """Write the fetched report somewhere the PyMOL shim can read it."""
+    import json
+    import tempfile
+
+    out = os.path.join(args.cache or tempfile.mkdtemp(),
+                       "channelsdb_%s.json" % args.pdb_id.lower())
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    if not os.path.exists(out):
+        with open(out, "w", encoding="utf-8") as fh:
+            json.dump(report, fh)
+    return out
+
+
+def cmd_caver(args) -> int:
+    """Stage 2: write a CAVER config, or choose tunnels from its output."""
+    from .caver import CaverParams, caverdock_note, read_summary, select, write_config
+
+    if args.action == "config":
+        params = CaverParams()
+        for key in ("probe_radius", "shell_radius", "shell_depth",
+                    "clustering_threshold", "seed"):
+            value = getattr(args, key, None)
+            if value is not None:
+                setattr(params, key, value)
+        if args.exclude:
+            params.exclude = tuple(_split_csv(args.exclude))
+        if args.start_residues:
+            params.start_residues = tuple(_split_csv(args.start_residues))
+        if args.start_atoms:
+            try:
+                params.start_atoms = tuple(int(v) for v in _split_csv(args.start_atoms))
+            except ValueError:
+                return _fail("--start-atoms wants PDB atom serial numbers, got %r"
+                             % args.start_atoms)
+        point = None
+        if args.start:
+            try:
+                point = [float(v) for v in _split_csv(args.start)]
+            except ValueError:
+                return _fail("--start wants three numbers, got %r" % args.start)
+        if args.start_cavity:
+            if not args.structure:
+                return _fail("--start-cavity needs --structure to measure against")
+            if point is not None:
+                return _fail("give --start or --start-cavity, not both: one is a "
+                             "point you chose, the other derives one")
+            from .caver import cavity_start_point
+
+            try:
+                found = cavity_start_point(
+                    args.structure, _split_csv(args.start_cavity),
+                    probe_radius=params.probe_radius)
+            except (OSError, ValueError) as exc:
+                return _fail(str(exc))
+            point = list(found.xyz)
+            print(found.summary())
+            if found.burial < 80:
+                print("  WARNING burial %d is low for a catalytic site; this "
+                      "point may be in bulk solvent rather than a pocket"
+                      % found.burial)
+        out = args.out or "caver_config.txt"
+        try:
+            write_config(out, params, point)
+        except ValueError as exc:
+            return _fail(str(exc))
+        print("wrote %s" % out)
+        print("  probe %.2f A (CAVER's own default is 0.90, which finds "
+              "channels no water can pass)" % params.probe_radius)
+        return 0
+
+    if args.action == "run":
+        from .caver import run_caver
+
+        for need in ("structure", "config", "output_dir"):
+            if not getattr(args, need, None):
+                return _fail("'caver run' needs --structure, --config and an "
+                             "output directory")
+        try:
+            out = run_caver(args.structure, args.config, args.output_dir,
+                            caver=args.caver, java=args.java, heap=args.heap)
+        except (FileNotFoundError, RuntimeError) as exc:
+            return _fail(str(exc))
+        print("CAVER finished; output in %s" % out)
+        args.output_dir = out
+
+    try:
+        clusters = read_summary(args.output_dir)
+    except (OSError, ValueError) as exc:
+        return _fail(str(exc))
+    sel = select(clusters, keep=args.keep, floor=args.floor)
+    print("%d cluster(s) found; carrying %d forward"
+          % (len(clusters), len(sel.kept)))
+    print(sel.summary())
+    if sel.kept and not args.quiet:
+        print()
+        print(caverdock_note(sel))
+    return 0 if sel.kept else 1
+
+
 def cmd_patches(args) -> int:
     """Stage 3: classify one enzyme's residues and rank its epitopes."""
     from .figures import Runner
@@ -624,7 +810,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     f.add_argument("output_dir", help="a pose-search output folder (holds geom*_complex.pdb)")
     f.add_argument("--prefix", default="fig",
-                   help="goes at the front of every file this step writes (e.g. p6a)")
+                   help="goes at the front of every file this step writes (e.g. run1)")
     f.add_argument("--pse", help="which poses get a PyMOL session")
     f.add_argument("--svg", help="which poses get an editable SVG")
     f.add_argument("--pdb", help="which poses get their complex copied out")
@@ -659,7 +845,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hs.add_argument("output_dir", nargs="?", help="a pose-search output folder")
     hs.add_argument("--prefix", default="fig",
-                   help="goes at the front of every file this step writes (e.g. p6a)")
+                   help="goes at the front of every file this step writes (e.g. run1)")
     hs.add_argument("--up-pdb", help="prepared upstream enzyme (the pre-sampling route)")
     hs.add_argument("--dn-pdb", help="prepared downstream enzyme")
     hs.add_argument("--tunnel-up", help="normalised upstream tunnel chain")
@@ -702,7 +888,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     se = sub.add_parser("session", help="build the .pse for chosen poses (no rendering)")
     se.add_argument("output_dir", help="a pose-search output folder")
-    se.add_argument("--prefix", default="fig", help="front of every file written (e.g. p6a)")
+    se.add_argument("--prefix", default="fig", help="front of every file written (e.g. run1)")
     se.add_argument("--pse", help="which poses (default top1); same selection language")
     se.add_argument("--render", default="both", help="none, pair, assembly or both")
     se.add_argument("--out-dir", help="where sessions go (default <output_dir>/figures)")
@@ -736,6 +922,126 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--pymol", default=None)
     rn.add_argument("--dry-run", action="store_true")
     rn.set_defaults(func=cmd_render)
+
+    pr = sub.add_parser(
+        "prep", help="stage 1: select chains, ligands and altlocs",
+        description="Keeps the atoms the rest of the pipeline measures and "
+                    "drops the rest. Coordinates are never moved -- not "
+                    "re-centred, not symmetry-expanded. If you took a tunnel "
+                    "from ChannelsDB it is in the deposited entry's frame, "
+                    "and moving the protein silently invalidates it.")
+    pr.add_argument("structure", help="a deposited or modelled structure, PDB")
+    pr.add_argument("--chains", help="chains to keep, comma separated "
+                                     "(default: the first polymer chain)")
+    pr.add_argument("--keep", help="ligand resnames to KEEP: cofactors, "
+                                   "prosthetic groups, and the channelled "
+                                   "species (whose site gives the start point)")
+    pr.add_argument("--drop", help="extra resnames to drop")
+    pr.add_argument("--keep-waters", dest="keep_waters", action="store_true",
+                    help="rarely right: a water in a channel is a wall")
+    pr.add_argument("--keep-altlocs", dest="keep_altlocs", action="store_true",
+                    help="keep every alternate location rather than the "
+                         "highest-occupancy one. Two copies of a side chain "
+                         "narrow a channel that is not narrow")
+    pr.add_argument("--relabel", help="rename the kept chain to this id. A "
+                                     "pair built from two single-chain "
+                                     "entries has both enzymes on chain A, "
+                                     "and the pose stage cannot tell them "
+                                     "apart; renaming a chain does not move "
+                                     "it, so this is safe on the ChannelsDB "
+                                     "branch too")
+    pr.add_argument("--out", help="output PDB (default: <name>_prep.pdb)")
+    pr.set_defaults(func=cmd_prep)
+
+    cd = sub.add_parser(
+        "channelsdb", help="tunnels already computed for a deposited PDB entry",
+        description="Fetches precomputed tunnels from ChannelsDB 2.0, by both "
+                    "MOLE and CAVER, annotated by what they lead to. Faster "
+                    "than running CAVER and needs no CAVER install -- but "
+                    "coverage is per PDB ENTRY, not per protein, and the "
+                    "coordinates are that entry's.")
+    cd.add_argument("pdb_id", help="a 4-character PDB id, or a report.json on disk")
+    cd.add_argument("--method", choices=("Caver", "MOLE"),
+                    help="keep only one method's tunnels (default: both, so "
+                         "you can see where they disagree)")
+    cd.add_argument("--cache", help="directory to cache downloaded reports in")
+    cd.add_argument("--write", help="write each tunnel as a CAVER-format PDB here")
+    cd.add_argument("--validate", metavar="TUNNEL.PDB",
+                    help="one of YOUR CAVER clusters: superpose the database's "
+                         "structure onto yours and report whether any of its "
+                         "tunnels is the same tunnel")
+    cd.add_argument("--structure", help="your structure, for --validate")
+    cd.add_argument("--template", help="the database entry's structure, for --validate")
+    cd.add_argument("--align-method", dest="align_method", default="align",
+                    choices=("align", "super", "cealign"),
+                    help="align = sequence-based (default, needs similarity); "
+                         "super = sequence-independent; cealign = structural, "
+                         "best for remote homologs")
+    cd.add_argument("--align-select", dest="align_select",
+                    help="PyMOL selection in YOUR structure to fit on. Fitting "
+                         "on the site beats fitting on the whole fold: a "
+                         "whole-chain fit answers 'same fold', a tunnel "
+                         "comparison needs 'same site'")
+    cd.add_argument("--template-select", dest="template_select",
+                    help="the matching selection in the template -- restrict it "
+                         "to one chain when your structure is a fusion")
+    cd.add_argument("--pymol", default=None)
+    cd.set_defaults(func=cmd_channelsdb)
+
+    cv = sub.add_parser(
+        "caver", help="stage 2: configure CAVER, or pick tunnels from its output",
+        description="`caver config` writes a CAVER configuration with "
+                    "ChannelBridge's defaults (a 1.4 A water probe, not "
+                    "CAVER's 0.9) and your overrides. `caver select` reads a "
+                    "finished CAVER output folder and applies the published "
+                    "rule: keep the top three clusters above priority 0.55. "
+                    "Then proceed with the highest-priority one, or validate "
+                    "the survivors with CaverDock.")
+    cv.add_argument("action", choices=("config", "run", "select"))
+    cv.add_argument("output_dir", nargs="?",
+                    help="for 'select': a CAVER output folder (or its summary.txt)")
+    cv.add_argument("--out", help="for 'config': where the file goes")
+    cv.add_argument("--start", help="for 'config': starting point as 'x,y,z'")
+    cv.add_argument("--start-residues", dest="start_residues",
+                    help="for 'config': CAVER residue ids giving the starting "
+                         "point, comma separated ('B:128,B:303'). Use this "
+                         "when no ligand marks the site. Name the chain: "
+                         "without one CAVER silently assumes the first")
+    cv.add_argument("--start-atoms", dest="start_atoms",
+                    help="for 'config': PDB atom serial numbers, comma "
+                         "separated. Combines with the other two")
+    cv.add_argument("--start-cavity", dest="start_cavity",
+                    help="for 'config': DERIVE the starting point from these "
+                         "residues (needs --structure) -- the nearest point to "
+                         "their centroid that can hold the probe. Use this "
+                         "rather than --start-residues for a catalytic triad: "
+                         "the centroid of residues facing each other lands "
+                         "inside an atom, and CAVER then finds zero tunnels "
+                         "without saying why")
+    cv.add_argument("--probe-radius", dest="probe_radius", type=float, default=None,
+                    help="default 1.4 (water). CAVER's own default is 0.9, "
+                         "which roughly doubles the cluster count and leaves "
+                         "the top-ranked tunnel unchanged")
+    cv.add_argument("--shell-radius", dest="shell_radius", type=float, default=None)
+    cv.add_argument("--shell-depth", dest="shell_depth", type=float, default=None)
+    cv.add_argument("--clustering-threshold", dest="clustering_threshold",
+                    type=float, default=None)
+    cv.add_argument("--seed", type=int, default=None,
+                    help="fixed by default: CAVER's search is stochastic and "
+                         "the cluster NUMBERING can change without it")
+    cv.add_argument("--exclude", help="residue names to remove, comma separated")
+    cv.add_argument("--keep", type=int, default=3,
+                    help="how many clusters to carry forward (default 3)")
+    cv.add_argument("--floor", type=float, default=0.55,
+                    help="minimum CAVER priority (default 0.55, published)")
+    cv.add_argument("--structure", help="for 'run': the prepared structure")
+    cv.add_argument("--config", help="for 'run': the CAVER config to use")
+    cv.add_argument("--caver", help="CAVER directory (default: $CAVER)")
+    cv.add_argument("--java", default="java")
+    cv.add_argument("--heap", default="6g", help="JVM heap (default 6g)")
+    cv.add_argument("--quiet", action="store_true",
+                    help="omit the note on what CaverDock would and would not settle")
+    cv.set_defaults(func=cmd_caver)
 
     pa = sub.add_parser(
         "patches", help="stage 3: classify residues and rank the epitopes",

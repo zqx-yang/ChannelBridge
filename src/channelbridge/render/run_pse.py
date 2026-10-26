@@ -1,4 +1,4 @@
-# /opt/conda/envs-share/pymol-script/bin/pymol -cq run_pse.py -- complex=<pdb> out=<pse> [tunnel_up=..] [tunnel_dn=..] [up_chains=B,C] [dn_chains=N] [ligands=NAP,BGC] [oic_arm=1.0] [label=..]
+# pymol -cq run_pse.py -- complex=<pdb> out=<pse> [tunnel_up=..] [tunnel_dn=..] [up_chains=B,C] [dn_chains=N] [ligands=NAP,BGC] [oic_arm=1.0] [label=..]
 #      ... -- --selftest
 #
 # Thin PyMOL entry point for channelbridge.render.scenes.

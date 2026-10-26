@@ -13,8 +13,6 @@ htmlcov/
 venv/
 .DS_Store
 
-# CAVER is GPL-3 and must be obtained from caver.cz; never vendor it here.
-caver_*/
 caver.jar
 lib/*.jar
 
@@ -23,8 +21,28 @@ lib/*.jar
 *.ccp4
 out_*/
 output-complex*/
-examples/*/input/
+# examples/*/input/ is NOT ignored: the worked example's two prepared
+# structures are committed (848 KB, PDB-derived) so that the first command in
+# the README runs on a clean clone. Other example inputs still are.
 examples/*/output/
 
 # CAVER is GPL-3 and downloaded by the user; not ours to commit
 vendor/
+
+# Agent configuration. The skill under .claude/skills/ is a DEVELOPMENT
+# practices document written for this project's own authors: it names
+# internal project trees, private sibling skills and cluster operations
+# that mean nothing to anyone outside the group. The public-facing half of
+# it is CONTRIBUTING.md. Committing .claude/ is the normal convention for a
+# team repo; this one is excluded on content, not on principle.
+.claude/
+CLAUDE.local.md
+
+# The iMARS example set is reproducible rather than bundled: its structures
+# are deposited entries that `examples/iMARS/run_examples.py fetch` pulls,
+# and everything else under it is computed. The two decision tables, the 19
+# pair files and the script ARE committed -- the decisions, not the data.
+examples/iMARS/_entries/
+examples/iMARS/*/input/
+examples/iMARS/*/output/
+examples/iMARS/report.tsv

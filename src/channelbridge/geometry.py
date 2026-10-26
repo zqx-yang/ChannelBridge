@@ -22,8 +22,8 @@ The trade-off the coefficients encode: 1 A of D_IC is worth
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -51,9 +51,39 @@ class DOCoefficients:
     b: float
     c: float
     name: str = "unnamed"
+    #: Extra terms, as ``{feature: coefficient}``, added to the two published
+    #: ones. The published score has none, and adding one means the result is
+    #: NO LONGER the iMARS DO score -- give it another name and say what it
+    #: is, rather than reporting a four-term number as "DO".
+    #:
+    #: It exists because the published score is demonstrably blind to things
+    #: that matter. O_IC is one-sided: it measures only whether the DONOR
+    #: channel aims at the acceptor's exit, and says nothing about which way
+    #: the acceptor opens. A receiving mouth pointing 90 degrees away scores
+    #: exactly like one facing the donor squarely. The pose search samples
+    #: that orientation (``tilt``) and records the resulting angle, so the
+    #: feature is there for anyone who wants to score on it.
+    extra: Mapping[str, float] = field(default_factory=dict)
 
-    def __call__(self, d: float, o: float) -> float:
-        return self.a * d + self.b * o + self.c
+    def __call__(self, d: float, o: float, **features: float) -> float:
+        total = self.a * d + self.b * o + self.c
+        for key, weight in self.extra.items():
+            if key not in features:
+                raise KeyError(
+                    "%s needs feature %r, which was not given. Pass it to "
+                    "do_score(..., %s=<value>)." % (self.name, key, key))
+            total += weight * float(features[key])
+        return total
+
+    @property
+    def features(self) -> Tuple[str, ...]:
+        """Extra features this set needs, beyond D_IC and O_IC."""
+        return tuple(sorted(self.extra))
+
+    @property
+    def is_published(self) -> bool:
+        """False once an extra term is added -- then it is not iMARS DO."""
+        return not self.extra
 
     @property
     def degrees_per_angstrom(self) -> float:
@@ -169,7 +199,8 @@ def o_ic(p1, p2, p3, *, degenerate="raise") -> float:
     return angle_deg(p1, p2, p3, degenerate=degenerate)
 
 
-def do_score(d: float, o: float, coeffs: DOCoefficients = DO_PUBLISHED) -> float:
+def do_score(d: float, o: float, coeffs: DOCoefficients = DO_PUBLISHED,
+             **features: float) -> float:
     """The DO score for a given D_IC (A) and O_IC (degrees).
 
     No clamping: DO is a linear fit, and a value outside ``[0, 1]`` means the
@@ -178,13 +209,18 @@ def do_score(d: float, o: float, coeffs: DOCoefficients = DO_PUBLISHED) -> float
     """
     d = float(d)
     o = float(o)
+    if features and not coeffs.extra:
+        raise TypeError(
+            "%s is a two-term score and takes no extra features; got %s. "
+            "Build a DOCoefficients with extra={...} to score on them."
+            % (coeffs.name, ", ".join(sorted(features))))
     if not np.isfinite(d) or not np.isfinite(o):
         raise ValueError("DO needs finite D_IC and O_IC, got %r and %r" % (d, o))
     if d < 0:
         raise ValueError("D_IC cannot be negative, got %r" % (d,))
     if not (0.0 <= o <= 180.0):
         raise ValueError("O_IC must be in [0, 180] degrees, got %r" % (o,))
-    return float(coeffs(d, o))
+    return float(coeffs(d, o, **features))
 
 
 def dic_equivalent_of_oic(delta_oic: float, coeffs: DOCoefficients = DO_PUBLISHED) -> float:

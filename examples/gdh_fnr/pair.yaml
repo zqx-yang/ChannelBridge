@@ -1,6 +1,6 @@
 # ChannelBridge pair file -- GDH (upstream) to FNR (downstream), channelling NADPH.
 #
-# The worked example. It is the P5/P6 system: glucose dehydrogenase
+# The worked example. It is the this project system: glucose dehydrogenase
 # Q252L/E170K homotetramer (PDB 1RWB assembly 1, glucose from 3AY6, NADP built
 # from NAD) hands NADPH to spinach ferredoxin-NADP+ reductase (PDB 1FNC).
 #
@@ -18,7 +18,7 @@ upstream: 1
 targets:
   - id: 1
     name: GDH
-    file: input/p6a_t1_GDH_BGC-NAP.pdb
+    file: input/GDH_BGC-NAP.pdb
     chain: B                       # the protomer the pose is built on
     chains: BCDEFGHIJKLM           # the id block target 1 may use
     symmetry: D2                   # homotetramer; drives the occupancy check
@@ -47,7 +47,7 @@ targets:
 
   - id: 2
     name: FNR
-    file: input/p6a_t2_FNR_FDA-A2P.pdb
+    file: input/FNR_FDA-A2P.pdb
     chain: N
     chains: NOPQRSTUVWXYZ
     ligands: [FDA, A2P]
@@ -168,6 +168,6 @@ render:
     mouth: deepteal
     # The tunnel sits INSIDE a translucent surface, so it must be nearly
     # opaque or it vanishes; the envelope sits outside, in front of things
-    # worth seeing, so it is faint. Both are the p5d map's values.
+    # worth seeing, so it is faint. Both are the the reference run map's values.
     tunnel_transparency: 0.10
     binder_transparency: 0.70

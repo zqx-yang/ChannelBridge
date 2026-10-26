@@ -39,12 +39,10 @@ from channelbridge.geometry import (
     do_score,
 )
 
-ST2 = Path(os.environ.get("CHANNELBRIDGE_IMARS_ST2", "")) if os.environ.get(
-    "CHANNELBRIDGE_IMARS_ST2"
-) else Path(
-    "/home/hyyang/programs/ChannelBridge/claude/iMARS/"
-    "ScienceDirect_files_25Sep2026_13-27-44.168/1-s2.0-S0092867424014715-mmc3.xlsx"
-)
+# iMARS Table S2, which is copyrighted and is NOT redistributed here. Set
+# CHANNELBRIDGE_IMARS_ST2 to your own download of the supplement to run these
+# checks; the module skips without it.
+ST2 = Path(os.environ.get("CHANNELBRIDGE_IMARS_ST2", ""))
 
 openpyxl = pytest.importorskip("openpyxl", reason="openpyxl is needed to read Table S2")
 
