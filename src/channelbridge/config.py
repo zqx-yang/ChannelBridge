@@ -1,6 +1,6 @@
 """The pair file: everything about one enzyme pair, in one document.
 
-The P5 prototype carried its choices as ~40 command-line flags and a few
+An earlier prototype carried its choices as ~40 command-line flags and a few
 hard-coded chain ids. A pair file replaces them, so a run is reproducible
 from one artefact that can sit next to the results in version control.
 
@@ -251,8 +251,11 @@ class Target:
             return problems
         if self.file.suffix.lower() in (".cif", ".mmcif"):
             problems.append(
-                "%s: %s is mmCIF. CAVER reads PDB only; write .pdb at the prep stage."
-                % (self.name, self.file.name)
+                "%s: %s is mmCIF. CAVER reads PDB only. The prep stage reads "
+                "mmCIF and writes the PDB:\n"
+                "    chbridge prep %s --chains <id> --keep <ligand> "
+                "--out <name>.pdb"
+                % (self.name, self.file.name, self.file)
             )
         return problems
 
@@ -358,11 +361,21 @@ class PoseSpec:
 
     @property
     def n_poses(self) -> int:
-        """Grid size, for a budget estimate before anything is run."""
+        """Grid size, for a budget estimate before anything is run.
+
+        The plain product over-counts, because the search collapses axes that
+        are degenerate: at ``O_IC = 180`` the cone the azimuth sweeps is a
+        point, so twelve azimuths are one pose. Reporting the product made
+        ``validate`` promise 124,992 poses where the search scanned 108,624,
+        which is the kind of small disagreement that gets read as a bug in
+        whichever of the two you trust less.
+        """
         import math
 
         n_d = math.floor((self.dic_max - self.dic_min) / self.dic_step) + 1
-        return n_d * len(self.oic) * len(self.azimuth) * len(self.spin) * len(self.tilt)
+        per_oic = sum(1 if abs(float(o) - 180.0) < 1e-6 else len(self.azimuth)
+                      for o in self.oic)
+        return n_d * per_oic * len(self.spin) * len(self.tilt)
 
 
 def _render_style(raw):

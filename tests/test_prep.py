@@ -213,3 +213,228 @@ class TestRelabel:
         assert {a.chain for a in atoms.atoms} == {"A"}
         assert rep.relabelled_to is None
         assert "renamed" not in rep.summary()
+
+
+def ligand(resname, ch, seq, xyz, n=2):
+    """A het residue of *n* atoms starting at *xyz*, 1 A apart along x."""
+    return [("HETATM", "C%d" % i, "", resname, ch, seq,
+             (xyz[0] + i, xyz[1], xyz[2]), 1.0) for i in range(n)]
+
+
+class TestLigandsFromAnotherChain:
+    """A modelled structure does not put a ligand in its protein's chain.
+
+    AlphaFill gives every transplant its own chain id, so chain-based
+    selection alone keeps the protein and loses the cofactor -- and the report
+    then says "ligands kept: none" while the channel being measured runs
+    through the site whose occupant was the point of the measurement. Contact
+    decides instead.
+    """
+
+    def protein_and_ligands(self, tmp_path, copies):
+        rows = protein("A", 1, 4)
+        for ch, xyz in copies:
+            rows += ligand("FPP", ch, 1, xyz)
+        return structure(tmp_path, rows)
+
+    def test_a_touching_ligand_is_adopted(self, tmp_path):
+        s = self.protein_and_ligands(tmp_path, [("S", (1.0, 2.0, 0.0))])
+        _, rep = prepare(s, PrepParams(chains=["A"], keep_ligands=["FPP"]))
+        assert rep.ligands_kept == {"FPP": 2}
+        assert [r[:3] for r in rep.ligand_copies] == [("FPP", "S", 1)]
+        assert rep.ligand_copies[0][4] is True
+
+    def test_a_distant_copy_is_not_adopted(self, tmp_path):
+        s = self.protein_and_ligands(tmp_path, [("S", (0.0, 50.0, 0.0))])
+        _, rep = prepare(s, PrepParams(chains=["A"], keep_ligands=["FPP"]))
+        assert rep.ligands_kept == {}
+        # it is still reported, so "none kept" is explained rather than silent
+        assert rep.ligand_copies[0][3] == 0 and rep.ligand_copies[0][4] is False
+
+    def test_only_a_named_ligand_is_adopted(self, tmp_path):
+        # A neighbouring protomer's cofactor is not pulled in: nobody asked
+        # for it, and it belongs to the chain that was dropped.
+        rows = protein("A", 1, 4) + ligand("HEM", "S", 1, (1.0, 2.0, 0.0))
+        _, rep = prepare(structure(tmp_path, rows),
+                         PrepParams(chains=["A"], keep_ligands=["FPP"]))
+        assert rep.ligands_kept == {} and rep.ligand_copies == []
+
+    def test_contact_distance_is_a_flag(self, tmp_path):
+        s = self.protein_and_ligands(tmp_path, [("S", (1.0, 6.0, 0.0))])
+        kw = dict(chains=["A"], keep_ligands=["FPP"])
+        assert prepare(s, PrepParams(ligand_contact=4.0, **kw))[1].ligands_kept == {}
+        assert prepare(s, PrepParams(ligand_contact=8.0, **kw))[1].ligands_kept == {"FPP": 2}
+
+    def test_all_copies_by_default(self, tmp_path):
+        s = self.protein_and_ligands(
+            tmp_path, [("S", (1.0, 2.0, 0.0)), ("T", (2.0, 2.5, 0.0))])
+        _, rep = prepare(s, PrepParams(chains=["A"], keep_ligands=["FPP"]))
+        assert rep.ligands_kept == {"FPP": 4}
+
+    def test_best_keeps_the_most_contacted_copy(self, tmp_path):
+        # Four donors give four copies of one ligand; the spare ones are walls
+        # in somebody's channel, so 'best' exists.
+        s = self.protein_and_ligands(
+            tmp_path, [("S", (0.0, 3.9, 0.0)), ("T", (1.0, 1.0, 0.0))])
+        _, rep = prepare(s, PrepParams(chains=["A"], keep_ligands=["FPP"],
+                                       ligand_copies="best"))
+        assert rep.ligands_kept == {"FPP": 2}
+        kept = [r for r in rep.ligand_copies if r[4]]
+        assert len(kept) == 1 and kept[0][1] == "T"
+        assert max(r[3] for r in rep.ligand_copies) == kept[0][3]
+
+    def test_an_unknown_copy_policy_is_refused(self, tmp_path):
+        s = self.protein_and_ligands(tmp_path, [("S", (1.0, 2.0, 0.0))])
+        with pytest.raises(ValueError, match=r"all.*best"):
+            prepare(s, PrepParams(chains=["A"], keep_ligands=["FPP"],
+                                  ligand_copies="first"))
+
+    def test_relabel_renumbers_a_colliding_ligand(self, tmp_path):
+        # AlphaFill numbers every transplant 1, so moving it into the
+        # protein's chain would give it the address of residue 1. Downstream a
+        # residue is selected by chain and number, so this is not cosmetic.
+        s = self.protein_and_ligands(tmp_path, [("S", (1.0, 2.0, 0.0))])
+        atoms, rep = prepare(s, PrepParams(chains=["A"], keep_ligands=["FPP"],
+                                           relabel="U"))
+        assert rep.ligands_renumbered == [("FPP", "S", 1, 5)]
+        het = [a for a in atoms.atoms if a.hetatm]
+        assert {a.chain for a in het} == {"U"}
+        assert {a.resseq for a in het} == {5}
+        poly = {(a.chain, a.resseq) for a in atoms.atoms if not a.hetatm}
+        assert ("U", 5) not in poly
+
+    def test_a_ligand_that_does_not_collide_keeps_its_number(self, tmp_path):
+        rows = protein("A", 1, 4) + ligand("FPP", "S", 900, (1.0, 2.0, 0.0))
+        atoms, rep = prepare(structure(tmp_path, rows),
+                             PrepParams(chains=["A"], keep_ligands=["FPP"],
+                                        relabel="U"))
+        assert rep.ligands_renumbered == []
+        assert {a.resseq for a in atoms.atoms if a.hetatm} == {900}
+
+    def test_adoption_moves_nothing(self, tmp_path):
+        s = self.protein_and_ligands(tmp_path, [("S", (1.0, 2.0, 0.0))])
+        before = read_pdb(s)
+        atoms, _ = prepare(s, PrepParams(chains=["A"], keep_ligands=["FPP"],
+                                         relabel="U"))
+        want = {tuple(round(v, 3) for v in a.xyz)
+                for a in before.atoms if a.hetatm}
+        got = {tuple(round(v, 3) for v in a.xyz)
+               for a in atoms.atoms if a.hetatm}
+        assert got == want
+
+    def test_the_report_names_each_copy_and_its_fate(self, tmp_path):
+        s = self.protein_and_ligands(
+            tmp_path, [("S", (0.0, 3.9, 0.0)), ("T", (1.0, 1.0, 0.0))])
+        _, rep = prepare(s, PrepParams(chains=["A"], keep_ligands=["FPP"],
+                                       ligand_copies="best"))
+        text = rep.summary()
+        assert "from another chain" in text
+        assert "redundant copy" in text
+
+
+class TestRelabelMapping:
+    """A kept dimer needs each chain renamed, which is not a merge.
+
+    The pose stage refuses a complex whose two sides share a chain id, so a
+    dimeric side has to be given ids the other side does not use -- and a
+    single `--relabel` id cannot express that without collapsing the two
+    protomers into one chain.
+    """
+
+    def two_chains(self, tmp_path):
+        return structure(tmp_path, protein("A", 1, 3) + protein("B", 1, 3))
+
+    def test_each_chain_gets_its_own_id(self, tmp_path):
+        atoms, rep = prepare(self.two_chains(tmp_path),
+                             PrepParams(chains=["A", "B"], relabel="A:U,B:V"))
+        got = {(a.chain, a.resseq) for a in atoms.atoms}
+        assert {c for c, _ in got} == {"U", "V"}
+        assert len(got) == 6
+        assert "A->U" in rep.relabelled_to and "B->V" in rep.relabelled_to
+
+    def test_a_single_id_still_works_for_one_chain(self, tmp_path):
+        _, rep = prepare(structure(tmp_path, protein("A", 1, 3)),
+                         PrepParams(chains=["A"], relabel="U"))
+        assert rep.relabelled_to == "U"
+
+    def test_a_single_id_for_two_chains_is_still_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="merge"):
+            prepare(self.two_chains(tmp_path),
+                    PrepParams(chains=["A", "B"], relabel="U"))
+
+    def test_the_refusal_suggests_the_mapping(self, tmp_path):
+        with pytest.raises(ValueError, match=r"A:A,B:B"):
+            prepare(self.two_chains(tmp_path),
+                    PrepParams(chains=["A", "B"], relabel="U"))
+
+    def test_mapping_two_chains_onto_one_id_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="merge"):
+            prepare(self.two_chains(tmp_path),
+                    PrepParams(chains=["A", "B"], relabel="A:U,B:U"))
+
+    def test_a_kept_chain_left_out_of_the_mapping_is_refused(self, tmp_path):
+        # Leaving one out would let it keep an id the mapping just handed to
+        # another chain.
+        with pytest.raises(ValueError, match="does not name kept chain"):
+            prepare(self.two_chains(tmp_path),
+                    PrepParams(chains=["A", "B"], relabel="A:U"))
+
+    def test_naming_a_chain_that_is_not_kept_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="not kept"):
+            prepare(self.two_chains(tmp_path),
+                    PrepParams(chains=["A"], relabel="A:U,B:V"))
+
+    def test_an_adopted_ligand_follows_the_first_kept_chain(self, tmp_path):
+        rows = (protein("A", 1, 3) + protein("B", 1, 3)
+                + ligand("FPP", "S", 1, (1.0, 2.0, 0.0)))
+        atoms, _ = prepare(structure(tmp_path, rows),
+                           PrepParams(chains=["A", "B"], keep_ligands=["FPP"],
+                                      relabel="A:U,B:V"))
+        het = [a for a in atoms.atoms if a.hetatm]
+        assert het and {a.chain for a in het} == {"U"}
+
+    def test_a_malformed_mapping_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="not old:new"):
+            prepare(self.two_chains(tmp_path),
+                    PrepParams(chains=["A", "B"], relabel="A:U,B"))
+
+
+class TestDropResidues:
+    """A disordered terminus is attached, so it cannot be dropped by name."""
+
+    def test_a_range_goes(self, tmp_path):
+        s = structure(tmp_path, protein("A", 1, 8))
+        atoms, rep = prepare(s, PrepParams(chains=["A"], drop_residues=[(1, 3)]))
+        assert {a.resseq for a in atoms.atoms} == {4, 5, 6, 7, 8}
+        assert rep.residues_dropped == [(1, 3)]
+        assert rep.atoms_dropped_by_range == 3
+
+    def test_several_ranges(self, tmp_path):
+        s = structure(tmp_path, protein("A", 1, 8))
+        atoms, _ = prepare(s, PrepParams(chains=["A"],
+                                       drop_residues=[(1, 2), (7, 8)]))
+        assert {a.resseq for a in atoms.atoms} == {3, 4, 5, 6}
+
+    def test_a_kept_ligand_is_not_dropped_by_a_range(self, tmp_path):
+        # Ranges are for polymer termini; a ligand's number is unrelated and
+        # may well fall inside one.
+        rows = protein("A", 1, 5) + ligand("FPP", "A", 2, (1.0, 1.0, 0.0))
+        atoms, _ = prepare(structure(tmp_path, rows),
+                           PrepParams(chains=["A"], keep_ligands=["FPP"],
+                                      drop_residues=[(1, 3)]))
+        assert [a.resname for a in atoms.atoms if a.hetatm] == ["FPP", "FPP"]
+
+    def test_a_backwards_range_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="backwards"):
+            prepare(structure(tmp_path, protein("A", 1, 8)),
+                    PrepParams(chains=["A"], drop_residues=[(8, 1)]))
+
+    def test_the_report_names_what_went(self, tmp_path):
+        _, rep = prepare(structure(tmp_path, protein("A", 1, 8)),
+                         PrepParams(chains=["A"], drop_residues=[(1, 3)]))
+        assert "1-3" in rep.summary() and "residues dropped" in rep.summary()
+
+    def test_dropping_every_polymer_residue_is_refused(self, tmp_path):
+        with pytest.raises(ValueError, match="nothing is left"):
+            prepare(structure(tmp_path, protein("A", 1, 4)),
+                    PrepParams(chains=["A"], drop_residues=[(1, 4)]))

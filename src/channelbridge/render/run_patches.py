@@ -182,15 +182,29 @@ def run(a):
         a["structure"], chain, tunnel=a.get("tunnel"), ligands=ligands,
         params=params, axis_spheres=int(a.get("axis_spheres", 5)))
 
-    named = set()
-    if a.get("avoid"):
-        for spec in a["avoid"].split(";"):
-            spec = spec.strip()
-            if spec:
-                named |= _resi_set("prot and chain %s and (%s)" % (chain, spec))
-        if not named:
-            print("[patches] WARNING avoid= matched nothing: %s" % a["avoid"])
-    avoid = grow_avoid(named, residues, params)
+    def _named(key):
+        got = set()
+        if a.get(key):
+            for spec in a[key].split(";"):
+                spec = spec.strip()
+                if spec:
+                    got |= _resi_set("prot and chain %s and (%s)" % (chain, spec))
+            if not got:
+                print("[patches] WARNING %s= matched nothing: %s" % (key, a[key]))
+        return got
+
+    named = _named("avoid")
+    # A partner footprint is grown by its OWN distance. The contact cutoff
+    # that found it and the distance a hotspot must keep from it are
+    # different quantities, and the second is about a binder's own radius.
+    from_partner = _named("avoid_from")
+    spread = float(a.get("avoid_from_r", params.avoid_r))
+    radius = {r: spread for r in from_partner}
+    if from_partner:
+        print("[patches] avoid-from: %d residue(s) of a partner footprint, "
+              "grown %.0f A (other avoid selections grow %.0f A)"
+              % (len(from_partner), spread, params.avoid_r))
+    avoid = grow_avoid(named | from_partner, residues, params, radius)
 
     classes = {r: classify(v, in_core=r in core, in_channel=r in channel,
                            in_avoid=r in avoid, params=params)

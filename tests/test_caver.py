@@ -19,6 +19,7 @@ from channelbridge.caver import (
     caverdock_note,
     cavity_start_point,
     parse_residue_id,
+    read_log,
     read_summary,
     select,
     write_config,
@@ -176,7 +177,7 @@ class TestSelect:
     def test_a_short_top_tunnel_is_flagged(self):
         # "If the first tunnel is shorter than 5 A, the pocket may be on the
         # surface and tunnel analysis may not be relevant" -- which is
-        # exactly what p6a's FNR cluster 1 is, at 3.2 A
+        # exactly what the worked example's FNR cluster 1 is, at 3.2 A
         got = select([cl(1, 0.96, length=3.2), cl(2, 0.93, length=9.3)])
         assert any("may be on the surface" in n for n in got.notes)
 
@@ -299,3 +300,63 @@ class TestCavityStartPoint:
     def test_no_residues_is_an_error(self):
         with pytest.raises(ValueError, match="no residues given"):
             cavity_start_point(self._shell(), [])
+
+
+class TestReadLog:
+    """What CAVER loaded, which is not what the file holds.
+
+    The gap is silent in both directions and was measured the hard way: a
+    cargo not named in `exclude_residue_names` can still be missing from the
+    measurement (a clashing AlphaFill transplant is dropped), and a residue
+    holding the starting point is removed without a word. A pipeline that
+    wants to claim the cargo was out of the channel has to read this count.
+    """
+
+    LOG = """Caver computation started.
+Mapping snapshots...
+...finished.
+
+Basic parameters:
+starting_point_coordinates [4.811, 9.895, -12.308]
+probe_radius 1.4
+
+* Processing 1 *
+Residues: 597
+Atoms: 4911
+Constructing additively weighted voronoi diagram for 4911 spheres.
+Voronoi vertices: 33299
+"""
+
+    def test_it_reads_both_counts(self, tmp_path):
+        p = tmp_path / "log.txt"
+        p.write_text(self.LOG, encoding="utf-8")
+        got = read_log(str(p))
+        assert (got.residues, got.atoms) == (597, 4911)
+
+    def test_a_run_directory_works_too(self, tmp_path):
+        (tmp_path / "log.txt").write_text(self.LOG, encoding="utf-8")
+        assert read_log(str(tmp_path)).atoms == 4911
+
+    def test_the_first_snapshot_wins(self, tmp_path):
+        p = tmp_path / "log.txt"
+        p.write_text(self.LOG + "\n* Processing 2 *\nResidues: 1\nAtoms: 2\n",
+                     encoding="utf-8")
+        assert read_log(str(p)).atoms == 4911
+
+    def test_a_number_elsewhere_in_the_line_is_not_taken(self, tmp_path):
+        p = tmp_path / "log.txt"
+        p.write_text("Atoms: 7 of them\nResidues: 3\nAtoms: 11\n",
+                     encoding="utf-8")
+        # "Atoms: 7 of them" is four fields, not two: not a count line.
+        assert read_log(str(p)).atoms == 11
+
+    def test_no_count_is_an_error_not_a_zero(self, tmp_path):
+        """A check that cannot run must not report a pass."""
+        p = tmp_path / "log.txt"
+        p.write_text("Caver computation started.\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="Atoms:"):
+            read_log(str(p))
+
+    def test_a_missing_log_is_an_error(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            read_log(str(tmp_path / "nope"))

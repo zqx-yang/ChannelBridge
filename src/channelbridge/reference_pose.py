@@ -13,7 +13,7 @@ So the placement is constructed from the two channels alone:
   nothing about it. It is scanned, over the same tilt/azimuth/spin grid the
   pose search uses, with "channel aimed straight back at the upstream exit"
   as tilt 0. Constraining it to that one orientation is tempting and wrong --
-  on the p6a pair it costs 10 A of D_IC (18 A instead of 8 A) for a
+  on the worked example's pair it costs 10 A of D_IC (18 A instead of 8 A) for a
   requirement the metric does not make.
 * ``d`` is raised from the minimum until a spin exists that does not make the
   two enzymes interpenetrate, and the first such ``(d, spin)`` is the

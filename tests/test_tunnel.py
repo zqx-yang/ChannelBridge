@@ -252,7 +252,7 @@ class TestBurial:
         assert burial_at([0, 0, 0], np.zeros((0, 3)))[0] == 0
 
     def test_excluded_residues_must_not_be_counted(self):
-        # Counting a cofactor CAVER never searched inflates burial: the P5 bug.
+        # Counting a cofactor CAVER never searched inflates burial: the earlier bug.
         from channelbridge.io.pdb import Atom, AtomArray
 
         def atom(resname, x):

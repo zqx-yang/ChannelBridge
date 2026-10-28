@@ -10,20 +10,19 @@ run needs.
 
 > 🚧 **UNDER CONSTRUCTION — alpha** 🚧
 >
-> Published early so the method can be read and criticised. Stages 0 to 4 run
+> Published early so the method can be read and criticised. Stages 0 to 7 run
 > end to end -- structure prep, ChannelsDB lookup, CAVER, normalisation,
-> tunnel selection, patch selection and the hotspot map -- and are exercised
-> over 19 enzyme pairs in [examples/iMARS/](examples/iMARS/README.md). The
-> **pose search** (stage 5), CaverDock ranking and the generator-input stage
-> are not yet exposed through `chbridge` and still live in the prototype
-> scripts. The table under [Layout](#layout-and-what-is-built) says which is
-> which, per stage.
+> tunnel selection, patch selection, the hotspot map, the pose search and
+> the generator input -- and are exercised over 19 enzyme pairs in
+> [examples/iMARS/](examples/iMARS/README.md). **CaverDock ranking** (stage
+> 2c) is not exposed through `chbridge`: it was measured on this set and
+> could not return an answer (see
+> [docs/caverdock.md](docs/caverdock.md)). The table under
+> [Layout](#layout-and-what-is-built) says which is which, per stage.
 >
-> One consequence for a first-time reader: the commands that consume a pose
-> (`chbridge figures`, `session`, `render`) need a pose-search output folder,
-> which this package cannot yet produce. Interfaces and defaults may change
-> without notice, no release is tagged, and results produced with it should be
-> reported with the commit they came from.
+> Interfaces and defaults may change without notice, no release is tagged,
+> and results produced with it should be reported with the commit they came
+> from.
 
 ## What it does
 
@@ -105,8 +104,12 @@ pytest
 ```
 
 Python 3.9+, numpy. PyYAML is optional (pair files may be JSON). PyMOL is
-needed only for the prep, pose and figure stages, and is run as a subprocess
-rather than imported. The SVG assembler additionally needs scipy, matplotlib
+needed for the prep, patch and figure stages, and is run as a **subprocess**
+rather than imported; the pose search itself needs only numpy. If `pymol` is
+not on `PATH`, point `$CHBRIDGE_PYMOL` at it — every stage that needs PyMOL
+also takes `--pymol`. (A stage that cannot find PyMOL exits 127, which is
+the failure that once voided 38 runs while printing `ok`, so check the
+counts a stage reports, not just its exit code.) The SVG assembler additionally needs scipy, matplotlib
 and pillow: `pip install -e '.[figures]'`.
 
 A conda environment that covers PyMOL and a JRE as well:
@@ -163,6 +166,15 @@ chbridge tunnel buildA/out_X buildB/out_X \
 # The DO score for one geometry, and how much the constant set matters.
 chbridge do --dic 16 --oic 150 --all-sets
 
+# Stage 5: the search. The grid comes from the pair file; --max-ok stops it
+# early without biasing the answer, because the grid is ordered best-DO-first.
+# Writes poses.tsv, patch_pairs.tsv, patch_pair_best.tsv and a complex per pose.
+chbridge pose --pair-file examples/gdh_fnr/pair.yaml \
+    --up-pdb GDH.pdb --dn-pdb FNR.pdb \
+    --tunnel-up GDH_normalised.pdb --tunnel-dn FNR_normalised.pdb \
+    --patches-up GDH_hotspot_patches.tsv --patches-dn FNR_hotspot_patches.tsv \
+    --out-dir out-complex_GDH_FNR
+
 # Figures for chosen poses: sessions for the top ten, an editable SVG for the
 # best one, and one pose's structure copied out. Ray-traces run one at a time.
 chbridge figures out-complex_GDH_FNR --pse top10 --svg rank1 --pdb geom007 \
@@ -173,7 +185,7 @@ chbridge figures out-complex_GDH_FNR --pse top10 --svg rank1 --pdb geom007 \
 # own). Everything written carries the --prefix you choose.
 chbridge session out-complex_GDH_FNR --pse rank1 --prefix run1
 chbridge render run1_geom001_render.pse --prefix run1 --variant both \
-    --dic 17.0 --oic 165.0 --do 0.850
+    --dic 15.0 --oic 120.0 --do 0.812
 
 # Classify one enzyme's residues and rank its epitopes. Writes the two
 # tables every later stage reads; hand-edit them or supply your own.
@@ -187,7 +199,68 @@ chbridge hotspots --prefix run1 --up-chains B,C,D,E --dn-chains N \
     --up-name GDH --dn-name FNR --ligands NAP,BGC,FDA,A2P \
     --up-pdb GDH.pdb --dn-pdb FNR.pdb \
     --tunnel-up GDH_cl1_norm.pdb --tunnel-dn FNR_cl2_norm.pdb
+
+# Stage 7: turn a finished pose search into binder-design input. One spec per
+# pose per tool, carrying the pose's geometry and both enzymes' hotspots.
+chbridge generate out-complex_GDH_FNR --list-tools
+chbridge generate out-complex_GDH_FNR --tool RFD4-Proteina,RFdiffusion3 \
+    --prefix run1 --min-length 100 --max-length 150 --n-designs 1000
+
+# ...or ask for the easier jobs first. `context` crops the partner to what
+# sits near the epitope, which is also what keeps the job on a GPU.
+chbridge generate out-complex_GDH_FNR --mode monospecific
+chbridge generate out-complex_GDH_FNR --mode context --context-cut 30
 ```
+
+**Three ways to ask, and they are a ladder rather than alternatives:**
+
+| `--mode` | one job per | the partner is | the pose's geometry is |
+|---|---|---|---|
+| `bispecific` (default) | pose | a second target | **in the job** |
+| `monospecific` | enzyme | absent | not in the job at all |
+| `context` | enzyme | present, cropped, not targeted | in the job |
+
+A campaign can walk up it: take the monospecific answer as a starting point,
+re-run it in context so the binder is not designed into the partner, and keep
+the bispecific job for what survives. `monospecific` is the easiest to design
+and the only one that says nothing about the bridge — two binders made that
+way have no reason to be compatible with one pose, and `chbridge generate`
+says so when it writes them.
+
+**Hotspots are chosen, not copied.** A patch is 7–14 residues; the generator
+is handed the five (`--n-hotspots`) that a binder can actually lock onto —
+the exposed F/Y/W/I/L/M, spread along the sequence so they span the epitope
+rather than one turn of a helix. That is `patches.pick_hotspots`, the worked
+example's rule, and it is also BindCraft's advice for choosing a site. A
+patch with fewer anchors yields fewer hotspots and says so rather than
+padding the list with residues the binder cannot grip. RFdiffusion3 then gets
+its own `TIP` keyword for every one of them, so this package is not keeping a
+second copy of RFd3's per-residue atom table in sync with theirs.
+
+**What stage 7 pins, and why it matters more than it looks.** The target
+chains are conditioned per atom (`C_CRD` for RFD4-Proteina, the input
+coordinates for the others) and must stay **fixed relative to each other**:
+their relative placement *is* the output of stages 2–5. RFD4-Proteina's
+`C_CRDGRP` is the obvious-looking alternative and is wrong here — it
+preserves a group's internal geometry and leaves its global pose free, so
+with two targets it releases the inter-enzyme placement and discards D_IC and
+O_IC without failing. Every generated spec carries that sentence. The same
+applies to a context chain: it is there to occupy the space it occupies in
+the pose, which it cannot do if it is free to move.
+
+Tools that take no spec file get their job-script argument lines written
+instead; two are refused with the reason rather than given a spec they cannot
+honour:
+
+| tool | spec | stage 7 |
+|---|---|---|
+| RFdiffusion3 | JSON | written |
+| RFD4-Proteina | YAML + mmCIF | written |
+| BindCraft | JSON | written |
+| flexcraft | none (CLI args) | job-script lines |
+| RFdiffusion | none (Hydra args) | job-script lines |
+| protpardelle-1c | YAML | **refused** — no two-chain binder mode |
+| RFDpoly | none | **refused** — multi-polymer model, not this task |
 
 ### Two example sets
 
@@ -196,27 +269,59 @@ curated pair, with its two prepared structures committed so the first command
 above runs on a clean clone.
 
 [examples/iMARS/](examples/iMARS/README.md) is the opposite — nineteen enzyme
-pairs from the iMARS paper, represented by homologous deposited entries that
-nobody chose for this purpose, fetched rather than bundled. It exists to
-exercise both tunnel branches on structures that were not prepared for them,
-and that is what it does: 21 of its 24 enzymes have a ChannelsDB-annotated
-entry and 3 do not, so three pairs fetch one tunnel and compute the other.
+pairs from the iMARS paper, over twenty-four enzymes, fetched or predicted
+rather than bundled. It exists to exercise the pipeline on structures nobody
+prepared for it, and it is written as a **guide to input preparation**,
+because that is the part that decides what every later number means and the
+part this set got wrong first.
 
-It is also where the uncomfortable result lives. **Most ChannelsDB chains
-stop before the surface** as ChannelBridge defines it — only 10 of 31
-database-branch sides have one that reaches it. The chains end where the
-database's own surface definition put them, and since D_IC and O_IC are both
-measured at the mouth, a chain that stops while buried has no exit to
-measure.
+**The instructive failure is upstream of any stage.** The first version
+represented each enzyme by the top hit of an RCSB sequence search and read
+the search score as closeness to the enzyme. It is not — it ranks how well a
+*hit* matched the query — and checking every entry against RCSB's own UniProt
+mapping showed that **only 2 of the 24 entries held the enzyme they stood
+for**. Nothing downstream was wrong: ChannelsDB annotated exactly the entry
+it was asked about, CAVER measured exactly the coordinates it was given. That
+is what makes an input-preparation error expensive. Every enzyme now has
+coordinates of its own protein — 3 PDB entries, 2 switched to their own
+experimental entry, 10 AlphaFill, 5 AlphaFold DB and 4 predicted with
+AlphaFold3 — each with the reason recorded in `structures.tsv`, and
+**38 of 38 enzyme sides produce a normalised tunnel.**
 
-So the branch is used for what it is good at. ChannelsDB says what a tunnel
-is *for*, which CAVER cannot; CAVER produces a chain that reaches solvent,
-which the database does not. When a fetched chain falls short, CAVER is
-re-run **seeded from where the database put the site**, and the result is
-checked back against the database chain. That takes the set from 15 usable
-mouths to 36 of 38 — and on 6 of the 13 seeded enzymes CAVER recovers the
-annotated route, which is worth knowing before relying on the rest. The
-per-side detail is in that README.
+A second consequence is worth reading before relying on the ChannelsDB
+branch. Annotation is per **entry**, so the branch is only available where an
+enzyme's own coordinates happen to be an annotated PDB entry: here that is
+2 of 24, and the other 22 have the branch withdrawn rather than left pointing
+at tunnels of a protein the set no longer uses. Where it does apply, most
+database chains stop while still buried — where the database's own surface
+definition put them — and since D_IC and O_IC are both measured at the mouth,
+such a chain has no exit to measure. So each source is used for what it is
+good at: ChannelsDB says what a tunnel is *for*, which CAVER cannot, and
+CAVER produces a chain that reaches solvent, which the database does not.
+When a fetched chain falls short, CAVER is re-run **seeded from where the
+database put the site** and the result is checked back against the database
+chain.
+
+**Against iMARS's own predictions.** `examples/iMARS/compare_to_imars.py`
+puts our best pose beside the paper's own rank-1 linker fusion for each pair,
+on the same DO coefficients. Over all 19 pairs our best feasible pose scores
+higher for **19 of 19**, median **+0.1518 DO**. That is not a contest and not
+a result about enzymes: DO falls 0.0079 per angstrom of D_IC and almost the
+whole difference is D_IC — ours run 6–22 Å, theirs 10.1–55.3 Å. A terminal
+fusion gets whatever the construct folds into; a pose search is limited by
+the two surfaces instead of by the chain termini, and the comparison measures
+how much geometric room that buys. The narrowest row is the informative one:
+on 4CL–RAS, where their fusion already lands the exits 10.1 Å apart, the
+margin is +0.0129 and our D_IC is the worse of the two. No binder has been
+designed, and iMARS measured yields.
+
+Their supplement also publishes the scripts that produced those numbers
+(Table S7), and [docs/imars-verification.md](docs/imars-verification.md) §2
+reads them line by line. Their code confirms the construction we implement —
+including that O_IC is one-sided and measured on the upstream channel — and
+shows what it leaves open: CAVER's cluster 1 is hard-coded with no filters,
+nothing truncates the chain at the surface, and the CAVER parameter file the
+script reads is not in the supplement.
 
 The seven stages, which five are optional and what each reads and writes are
 in [docs/pipeline.md](docs/pipeline.md). The figure layer — what is in a
@@ -270,6 +375,10 @@ tested here; **to build** means the stage currently lives only in the
 author's project scripts and has a package home waiting for it.
 
 ```
+  input prep                       <- a structure OF THAT PROTEIN: its own
+      |                               entry, else AlphaFill, else AlphaFold DB,
+      |                               else AlphaFold3 with MSAs. A homolog is
+      v                               a different protein, not a fallback
       0 ChannelsDB search          <- by enzyme or PDB id. No structure
             |                         needed: this DECIDES which one you prepare
      +------+-----------------------------+
@@ -321,19 +430,20 @@ on both branches — is in [docs/pipeline.md](docs/pipeline.md).
 
 | # | stage | state | where it lives |
 |---|---|---|---|
+| — | input prep: find or predict a structure of *that* protein | **built** | `io/mmcif.py`, `examples/iMARS/find_structures.py` |
 | 0 | ChannelsDB lookup (a source of tunnels, not a step) | **built** | `channelsdb.py` |
-| 1 | structure selection and prep | **built** | `prep/` |
+| 1 | structure selection and prep (PDB or mmCIF in, PDB out) | **built** | `prep/` |
 | 2a | CAVER: configure and run it | **built** | `caver/` |
 | 2b | CAVER: normalise its output | **built** | `tunnel.py` |
 | 2b | choose which tunnels to keep | **built** | `caver/` |
 | 2b | validate ours against ChannelsDB | **built** | `channelsdb.py` |
-| 2c | CaverDock: rank tunnels by transport energetics | **to build** | — (run by hand today) |
+| 2c | CaverDock: rank tunnels by transport energetics | **not used** | — (measured and rejected: [docs/caverdock.md](docs/caverdock.md)) |
 | 3 | hotspot patch selection | **built** | `patches.py` |
 | 4 | hotspot map session | **built** | `render/hotspots.py` |
 | 5 | DO sampling: the metric | **built** | `geometry.py` |
-| 5 | DO sampling: the pose search | **to build** | `pose/` |
+| 5 | DO sampling: the pose search | **built** | `pose.py` |
 | 6 | session, render, SVG | **built** | `render/`, `figures.py` |
-| 7 | generator input (RFdiffusion3 etc.) | **to build** | `rfd3/` |
+| 7 | generator input (RFdiffusion3, RFD4-Proteina, BindCraft, ...) | **built** | `generators/` |
 
 Stage 4 runs **before** stage 5 and therefore cannot borrow a pose; it
 computes its own reference placement (`reference_pose.py`). Stage 6 is split
@@ -345,6 +455,7 @@ src/channelbridge/
   geometry.py        D_IC, O_IC, the DO score and its coefficient sets
   tunnel.py          CAVER sphere chains: orient, truncate, resample, O_IC arm
   reference_pose.py  places the two enzymes at O_IC 180 without a pose search
+  pose.py            the pose search: the grid, the four filters, the tables
   patches.py         residue classes and hotspot patches; the scoring is pure
   caver/             CAVER configuration, and which tunnels to carry forward
   channelsdb.py      precomputed tunnels from ChannelsDB 2.0, and the
@@ -365,7 +476,7 @@ src/channelbridge/
     run_pse.py  run_png.py  run_hotspots.py  run_patches.py
     run_validate.py  entry points run INSIDE PyMOL
   caver/  prep/                               stages 1 and 2a
-  pose/  rfd3/                               stage homes, not yet filled
+  generators/                                stage 7: tool input specs
 tests/               including a cross-build regression against real CAVER output
 docs/                caver-builds.md, figures.md, imars-verification.md,
                      pipeline.md, pitfalls.md

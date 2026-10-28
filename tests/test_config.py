@@ -206,8 +206,22 @@ class TestDiskValidation:
 
 class TestPoseGrid:
     def test_default_grid_size_matches_the_documented_scan(self):
-        # D_IC 6-36 step 1 (31) x 7 O_IC x 12 azimuth x 12 spin x 4 tilt.
-        assert PoseSpec().n_poses == 31 * 7 * 12 * 12 * 4
+        # D_IC 6-36 step 1 (31) x 12 spin x 4 tilt, and per O_IC: 12 azimuths
+        # for each of the six below 180, but ONE at 180, where the cone the
+        # azimuth sweeps is a single point. The naive product (31*7*12*12*4 =
+        # 124,992) is what the search does not scan.
+        assert PoseSpec().n_poses == 31 * (6 * 12 + 1) * 12 * 4
+        assert PoseSpec().n_poses == 108_624
+
+    def test_the_estimate_equals_what_the_search_actually_scans(self):
+        """Two numbers for one grid is a bug report waiting to happen."""
+        from channelbridge.pose import PoseParams, pose_grid
+
+        for raw in ({}, {"oic": [180]}, {"oic": [150]}, {"oic": [180, 90]},
+                    {"dic_min": 8, "dic_max": 20, "dic_step": 4},
+                    {"tilt": [0, 45], "spin": [0, 90], "azimuth": [0, 120, 240]}):
+            spec = PoseSpec.from_dict("pose", raw)
+            assert spec.n_poses == len(pose_grid(PoseParams.from_spec(spec))), raw
 
     def test_a_smaller_grid_is_reported_smaller(self):
         small = PoseSpec.from_dict("pose", {"tilt": [0], "azimuth": [0], "spin": [0]})

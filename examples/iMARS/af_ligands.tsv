@@ -1,0 +1,40 @@
+#	Which transplanted ligand defines each AlphaFill model's channel start
+#	point, and the evidence for it. Produced by `./pick_ligands.py --tsv`.
+#
+#	AlphaFill is not a cofactor service: it transplants everything it can find
+#	from any homologous holo structure, 15-82 ligand copies over 11-30 types
+#	per model here. The inventory of one monoterpene synthase model includes
+#	CHES buffer, a PVP oligomer, the antiviral baloxavir and three
+#	bisphosphonate drugs alongside the prenyl diphosphates, so picking by
+#	clash count or donor identity alone selects buffer. The ligand is chosen
+#	by what the enzyme's channel CARRIES, from the paper's own substrate and
+#	product columns, then verified to be in the fetched model.
+#
+#	exactness	`exact` = the real cargo or cofactor. `surrogate` = a
+#			crystallographic analogue standing in for it. GES, MYS and OCS
+#			consume GPP (C10) and AlphaFill transplanted none into any of the
+#			three; GST (geranyl S-thiolodiphosphate) is the non-hydrolysable
+#			C10 analogue. The similar-looking DST is a C5 dimethylallyl
+#			analogue, one isoprene short, and would mark the wrong subsite.
+#	clashes_per_atom	AlphaFill's clash count for that transplant divided by
+#			the ligand's heavy atoms, because a raw count cannot be compared
+#			between a 27-atom SAM and a 19-atom GST.
+#	start_mode	`ligand` = use the transplanted ligand's centroid.
+#			`cavity` = the transplant clashes too hard (> 2.0 per atom) to
+#			mark a cavity the model actually has, so the start point is
+#			derived with `caver config --start-cavity` from the residues
+#			lining it, which finds a point that is genuinely open. The three
+#			`cavity` rows are exactly the three surrogates, which is what one
+#			would expect of a C10 analogue placed from a ~30 % identity donor.
+#
+enzyme	uniprot	model	channel_ligand	exactness	donor	donor_identity	clashes	ligand_atoms	clashes_per_atom	start_mode	reason
+4'OMT	Q9LEL5	alphafill_Q9LEL5.cif	SAM	exact	4PGH	0.362	21	27	0.8	ligand	S-adenosylmethionine, the methyl donor of this 4'-O-methyltransferase
+7OMT	C7SDN9	alphafill_C7SDN9.cif	SAM	exact	7V6J	0.358	20	27	0.7	ligand	as 4'OMT; a SAM-dependent O-methyltransferase
+ADS	Q9AR04	alphafill_Q9AR04.cif	FPP	exact	5IK0	0.383	31	24	1.3	ligand	farnesyl diphosphate, the C15 substrate of amorphadiene synthase
+BBS	A0A075W0Z3	alphafill_A0A075W0Z3.cif	FPP	exact	5IK0	0.422	33	24	1.4	ligand	farnesyl diphosphate, the C15 substrate of bisabolene/bisabolol synthase
+CTS	A8CDR5	alphafill_A8CDR5.cif	HEM	exact	5YLW	0.359	24	43	0.6	ligand	protoporphyrin IX / Fe, the catalytic centre of this P450
+ERG20	P08524	alphafill_P08524.cif	FPP	exact	5JA0	0.453	40	24	1.7	ligand	farnesyl diphosphate, ERG20's product and the intermediate channelled onward (GPP, its substrate, is also present)
+GES	Q6USK1	alphafill_Q6USK1.cif	GST	surrogate	3SDU	0.305	48	19	2.5	cavity	geranyl S-thiolodiphosphate, the C10 non-hydrolysable analogue of GPP, which AlphaFill did not transplant here
+MYS	Q93X23	alphafill_Q93X23.cif	GST	surrogate	3SDU	0.364	85	19	4.5	cavity	as GES
+OCS	A4FVP2	alphafill_A4FVP2.cif	GST	surrogate	3SDU	0.321	98	19	5.2	cavity	as GES
+RNMT	A0A1C9U5X5	alphafill_A0A1C9U5X5.cif	SAM	exact	5KOC	0.563	14	27	0.5	ligand	as 4'OMT; a SAM-dependent N-methyltransferase

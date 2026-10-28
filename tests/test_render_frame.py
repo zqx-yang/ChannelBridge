@@ -405,7 +405,7 @@ class TestSpreadInView:
 class TestLabelsStayInThePicture:
     """A label pushed clear of its neighbours must not land in the margin.
 
-    On the p6a hotspot map the relaxation worked -- and put `FNR p05` at the
+    On the worked example's hotspot map the relaxation worked -- and put `FNR p05` at the
     right-hand edge of the frame, far from the patch it names. Separation
     without bounds trades one unreadable figure for another.
     """

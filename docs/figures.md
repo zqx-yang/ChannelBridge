@@ -13,6 +13,10 @@ does both in one go for the common case.
 | position | the pose | computed: smallest clash-free D_IC at O_IC 180 |
 | runs | after the DO sampling | **before** it |
 
+The `<output-dir>` all three read is what `chbridge pose` wrote — the
+`geomNNN_..._complex.pdb` files and their tables. A run prefix in front of
+those names is fine; the pose id is found inside the name, not at its start.
+
 Figure generation is deliberately a **separate command from the pose search**.
 Which poses deserve a figure is a question asked long after the search, often
 several times with different answers, and re-running a search to change a
@@ -23,14 +27,46 @@ Building and rendering are separate for the same reason one step down:
 ```
 chbridge session <output-dir> --pse rank1 --prefix run1      # -> run1_geom001_render.pse
 # open it, rotate to the frame you want, save it, then:
-chbridge render run1_geom001_render.pse --prefix run1 --variant both \
-    --dic 17.0 --oic 165.0 --do 0.850
+chbridge render run1_geom001_render.pse --prefix run1 --variant both
 ```
 
 `render` takes **any** session — ours, or one you built yourself — so "turn it
 until it looks right, then render that" is the normal path rather than
 something to work around. A camera is a judgement, and no scan of clear-view
 scores substitutes for someone looking at it.
+
+### Two things that make a figure disagree with itself
+
+Both were found by a figure that rendered cleanly and was wrong, so both are
+now checked rather than documented.
+
+**The tunnels have to be carried onto the pose.** A session is handed the
+pose's complex and, separately, each enzyme's tunnel — and that tunnel is in
+the frame of the *prepped* enzyme, not of the pose. `tunnel_up_ref` and
+`tunnel_dn_ref` name the structures the tunnels were computed on, and are
+what moves them:
+
+```
+chbridge session <output-dir> --prefix run1 \
+    --pse-arg up_chains=B --pse-arg dn_chains=N \
+    --pse-arg tunnel_up=GDH_cl1_norm.pdb --pse-arg tunnel_dn=FNR_cl2_norm.pdb \
+    --pse-arg tunnel_up_ref=GDH.pdb     --pse-arg tunnel_dn_ref=FNR.pdb
+```
+
+Leave the references out and nothing fails: both channels are drawn where the
+unposed enzymes had them, and the session measures between *those*. Measured
+on one pair, that was **D_IC 38.0 Å and DO 0.538 against the pose's own 6.0 Å
+and 0.937**, with every step exiting 0. `chbridge session` now compares its
+own geometry with the pose's and refuses a session that disagrees.
+
+**The labels come from the session, not from nowhere.** `--dic`, `--oic` and
+`--do` default to 0.0, which is a real-looking value — a render driven from a
+session alone used to publish `D_IC = 0.0 Å, DO = 0.000` across an otherwise
+correct picture. The session is the only place those numbers exist, so it
+writes them to `<session>_geometry.json` beside the `.pse` (with the
+projected O_IC axis and the frame), and `render` reads that file. An explicit
+flag still wins, for a hand-rotated session showing a pose whose numbers you
+know better; with neither source, `render` says so instead of labelling zero.
 
 ---
 
@@ -260,8 +296,12 @@ With no `--out` that writes `run1_hotspot-map.pse`.
 
 The relative position is computed here — the smallest clash-free D_IC at
 O_IC 180°, which is the highest-DO geometry the pair can reach. On the worked
-GDH–FNR pair: **D_IC 9.0 Å, O_IC 180°, DO 0.9314**, closest approach 3.38 Å.
-Pass `--complex` instead to use a pose that already exists.
+GDH–FNR pair, on the CAVER build this repository is measured against:
+**D_IC 6.0 Å, O_IC 180°, DO 0.9551**, closest approach 3.35 Å — and 6.0 Å is
+the scan's own floor, so the placement is bounded by the grid rather than by
+the proteins. The number is build-specific: see
+[pipeline.md](pipeline.md#the-reference-placement). Pass `--complex` instead
+to use a pose that already exists.
 
 Four choices distinguish it from a pose session:
 

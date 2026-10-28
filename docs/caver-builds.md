@@ -238,6 +238,20 @@ The residual difference against build A is 1.0 A of D_IC and 15 deg of O_IC
 measurements: the normalised exits sit 1.44 A apart, and the normalised mouth
 directions differ by 15.5 deg. Nothing unexplained remains.
 
+> **What these four pose rows are, and are not.** They were measured in one
+> sitting, with one version of the pose search, which is what makes them
+> comparable ACROSS the three columns -- and the differences between columns
+> are the subject of this page. They are not the current answer for any one
+> column: the pose search has changed since, and `examples/gdh_fnr` as
+> committed now gives **D_IC 15.0 A, O_IC 120 deg, DO 0.8120** on the
+> build-B normalised chain, bridging the same GDH_p4 + FNR_p1 pair. The
+> tunnel measurements above it are unaffected and still reproduce -- the
+> normalised run gives back build A's patch table exactly, which is checked
+> every time `examples/gdh_fnr` runs.
+>
+> The lesson is the one this page exists for: **a pose number is only
+> meaningful with the build AND the code version beside it.** Quote both.
+
 ### A higher DO from a raw chain is an artefact
 
 Note that the raw run scores **highest**. It measures D_IC from an exit in

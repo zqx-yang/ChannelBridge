@@ -108,10 +108,11 @@ coordinates, and `DbTunnel.distance_is_arc_length` says whether the reported
 series can be used.
 
 **A fetched chain often stops before the surface.** The database truncates by
-its own surface definition, not this package's. Of the 31 database-branch
-enzyme sides in `examples/iMARS`, only 10 have a candidate chain whose ends
-fall below burial 15; on 5ICE every Procognate chain has a minimum burial of
-29-71 atoms along its whole length. D_IC and O_IC are both measured at the
+its own surface definition, not this package's. Measured over the first,
+homolog-based version of `examples/iMARS`, which put 31 enzyme sides on that
+branch: only 10 had a candidate chain whose ends fell below burial 15, and on
+5ICE every Procognate chain has a minimum burial of 29-71 atoms along its
+whole length. D_IC and O_IC are both measured at the
 mouth, so check the verdict (`mouth` usable; `buried`, `recessed`, `surface`
 not) before quoting geometry from a fetched tunnel.
 
@@ -119,10 +120,11 @@ not) before quoting geometry from a fetched tunnel.
 identifies the route (its category says what the route is FOR, which CAVER
 cannot) and CAVER produces a chain that reaches solvent (which the database
 does not). Run CAVER from the database chain's buried end, then check the
-result back against that chain. Two cautions from doing it over 13 enzymes:
-seed from the chain END, not from a bound ligand -- seeding from the ligand
-first dropped annotation agreement from 6 enzymes to 2, because CAVER then
-finds whatever leaves the ligand site; and judge the check with
+result back against that chain. Two cautions, both measured over the 13
+seeded enzymes of that first version: seed from the chain END, not from a
+bound ligand -- seeding from the ligand first dropped annotation agreement
+from 6 enzymes to 2, because CAVER then finds whatever leaves the ligand
+site; and judge the check with
 `Match.recovery()`, not `Match.verdict()`, because your chain is longer by
 design and the exit-led verdict calls a recovered route "different tunnel".
 
@@ -164,7 +166,159 @@ poses. `do_coefficients:` records which was used.
 **DO is a linear fit and is not clamped.** A value outside `[0, 1]` means the
 pose is outside the range the fit was made on.
 
-## PyMOL (the prep and pose stages)
+## The pose search
+
+**Build a pose along the axis you will score it with.** `Tunnel.axis` (the
+O_IC arm) and `Tunnel.fitted_axis` differ by 9-12 degrees on real tunnels. If
+the grid places the downstream exit along one and `geometry.o_ic` then
+measures against the other, every row of `poses.tsv` records an O_IC that was
+never requested, and nothing in the output looks wrong. Assert the two agree;
+`tests/test_pose.py` does.
+
+**O_IC constrains the downstream exit, not the downstream enzyme.** Its
+orientation is three free parameters and the grid samples `tilt` and `spin`,
+which are two. The third -- which way the channel tilts -- is
+`tilt_azimuth`, and it defaults to a single value, so the default grid
+reaches the downstream channel directions on an arc rather than over the
+sphere. It is the first thing to sweep when a pair returns nothing feasible.
+
+**A pose that scores well may have nowhere to put a binder.** DO sees two
+exits. It does not see whether any pair of epitopes is both the right
+distance apart and has a clear line between them. On the worked example the
+best-DO geometry is at D_IC 9 A and the best *buildable* pose is at 17 A --
+so a search without the bridgeable-pair test returns the wrong answer
+confidently.
+
+**A homomultimer presents the binder once per protomer.** One good pose on
+one protomer can be impossible on all four at once, and neither D_IC, O_IC
+nor the single-pose clash test sees it: that test already covers one
+downstream enzyme against the whole upstream assembly, but never one
+downstream copy against another.
+
+**Judge a voxel clash test at its boundary, not on average.** A grid built by
+growing whole voxels around snapped atom positions carries about 1.7 A of
+slop at 1 A spacing, which is half a clash cut-off. Erode and dilate by one
+voxel half-diagonal and measure exactly between the two, or the verdict is
+wrong by a few tenths of an angstrom in a way no output reveals.
+
+**Number only the poses you could build.** Issuing ids across the whole grid
+made `geom050145` the best design in a 100,000-point scan: a number that
+encodes where in a grid a pose sat, not how good it is.
+
+**Do not edit the code a running scan is calling.** Each pair here is a fresh
+subprocess, so a mid-run edit is picked up by every pair after it -- while
+the ones before it ran the old code. Fifteen of nineteen pairs crashed this
+way, on an argument added to a function before it was added to the parser.
+
+## Re-running a stage after its inputs change
+
+**Key a skip on timestamps, not on existence.** A stage that reuses its
+output because the file is there cannot see that its input changed, so a
+corrected run is answered out of the cache it was meant to replace. This has
+bitten this project three times -- the tunnel/patch/pose stages, the CAVER
+run directory, and the SVG's helper renders -- and the fix is one line each
+time: compare mtimes against every input, including the config.
+
+**Never judge success by the existence of an output file.** Judge it by what
+the step reported. A stage that printed `ok` for 38 runs that had all exited
+127 is the worst case, and the tell was that the `ok` lines carried no
+counts.
+
+## Input preparation (mmCIF, predicted and transplanted models)
+
+**An entry can hold the right protein and not hold all of it.** Identity is
+necessary and not sufficient. 4CL's only experimental structure is a
+4CL::stilbene-synthase *fusion* at 3.1 A in which 4CL's last 102 residues were
+never modelled -- and 4CL's C-terminal domain is the one that closes over its
+active site. A tunnel computed there runs out through a hole where a domain
+should be, and reports as a wide channel. Require a minimum fraction of the
+aligned reference span observed, and a maximum unobserved run. Measure
+coverage over the **aligned span**, not the whole UniProt length: a cleaved
+transit peptide is correct biology, not 10 % missing.
+
+**The first cross-referenced entry is not the right entry.** Coverage is a
+veto, not a ranking. Among entries that pass it, prefer a bound cargo (the
+start point comes from where the channelled species sits), then wild type (an
+active-site mutant is a different channel -- which is why someone made it),
+then resolution. Taking the first cross-reference for BAS gives the apo 3A5Q
+over the holo wild-type 3A5R at 1.60 A, and can give 3A5S, the I207L/L208F
+mutant.
+
+**AlphaFill only outranks a plain model if its transplant is usable.** It is
+preferred *because* a ligand-derived start point survives, so a transplant
+that clashes into the model's own side chains cannot carry that preference:
+4CL's ATP, AMP and CoA arrive from a 0.69-identity homolog at 2.6, 4.1 and 4.4
+clashes per heavy atom. Normalise the clash count by atom count before
+comparing ligands, and count only the **best-identity tier** of donors --
+accepting any usable transplant at any identity is picking by clash count,
+which lands on buffer.
+
+**Keep overrides in the code, never as an edit to a generated table.** A
+hand-edit to a file produced by a script is lost the next time anyone runs
+the script, and lost silently. An override belongs where the script will read
+it, with the reason and what the generic rule would have chosen.
+
+**A domain-split score that ignores intra-block confidence finds floppy
+termini.** Maximising inter-block minus mean intra-block PAE looks like it
+identifies two separately-placed domains and does not: a disordered
+80-residue terminus has a high PAE to everything *including itself*, so it
+wins. On four models here that version put one dimer's boundary 322 residues
+from the truth with a higher score than another dimer's correct one, and
+invented a split in a single-chain protein. Require both blocks to be
+confidently placed within themselves and score by `inter - max(intra_a,
+intra_b)`; then both dimers land on their chain boundary exactly. The score
+still separates two-body from one-body cases by only 1.2 against 0.9, so
+report it against known controls rather than as a verdict.
+
+**Read `auth_*`, not `label_*`.** An mmCIF carries two numbering schemes.
+`label_asym_id` is the structure-model one: each distinct chemical entity gets
+its own asym id, so a deposited protein is `A` and *each* of its cofactors,
+metals and waters becomes `B`, `C`, `D`... `auth_*` carries the depositor's
+chain letters and residue numbers -- the ones in the paper, in ChannelsDB and
+in the `--chain A` a user will type. Reading `label_*` therefore breaks the
+pipeline in a way that looks like biology: `prep --chain A --keep HEM` keeps
+the protein, silently drops the haem because it is `label_asym` B, reports
+"ligands kept: none", and the channel then measured runs straight through the
+empty cofactor site. Residue numbers diverge too -- `label_seq_id` counts
+from 1 along the entity and is null for anything non-polymer, so a residue
+named in a paper is a different number here, or none at all.
+
+**A `label_seq_id` of `.` is normal, not corrupt.** It is null for every
+HETATM. A reader that calls `int()` on it crashes on the first ligand, which
+is also the first file where it matters.
+
+**A quoted value in `atom_site` shifts every later column.** Atom names like
+`"O5'"` are quoted, and mmCIF ends a quoted value at quote-then-whitespace,
+not at the first quote. A `str.split()` reader works until it meets one, and
+then reads coordinates out of the wrong fields -- a wrong shape, not an error.
+
+**A ligand in a modelled structure is not in its protein's chain.** AlphaFill
+gives every transplant a chain of its own: one model in the iMARS set has the
+protein in `A` and ligands in `B`..`Z` and `AA`..`AW`. Selecting by chain
+alone keeps the protein and loses the ligand whose site is the whole point, so
+`chbridge prep` adopts a `--keep` ligand from any chain when it comes within
+`--ligand-contact` of the kept one, and reports every copy it saw with its
+contact count.
+
+**Several copies of one ligand are the normal case there, and each spare one
+is a wall.** AlphaFill transplants from every donor it finds: four copies of
+GPP in one model, with 40, 35, 18 and 3 protein contacts -- the last sitting
+half on the surface. `--ligand-copies best` keeps the most-contacted one.
+The default keeps them all, because a protein with two real cofactor sites is
+also the normal case, and which one you have is not something the file says.
+
+**Renaming the chain collides the ligand with residue 1.** AlphaFill numbers
+every transplant `1`, so moving it into the protein's chain with `--relabel`
+gives it the address of the protein's first residue. Downstream a residue is
+selected by chain and number, so this is not cosmetic; prep renumbers past the
+last protein residue and says so in both the report and the PDB header.
+
+**mmCIF has no column widths and PDB does.** A two-character chain id, a
+residue number past 9999, a five-character atom name or a serial past 99999
+does not fail to write -- it writes into the neighbouring field, and is then
+parsed without complaint as something else. Checked before writing.
+
+## PyMOL (the prep and patch stages)
 
 **`iterate` has no builtins** in its namespace, so an expression that works in
 a normal interpreter can fail there. Supply the names you use explicitly (a
@@ -204,72 +358,3 @@ ligand checks and renumbers globally.
 
 **Context is quadratic.** Trimming context chains to residues within 20 A of
 the target costs about 0.25x.
-
-## A CAVER tunnel is too dense to hand straight to CaverDock
-
-A current CAVER build emits sphere chains at **~0.17 Å spacing** (185 spheres
-over 31.7 Å on a typical cluster). CaverDock's own example tunnel is 13 spheres
-at **0.956 Å** — about six times coarser.
-
-Feed the raw chain to CaverDock's `discretizer` and it produces **2 disks from
-95 spheres**. The job then **completes normally and prints plausible energies**
-(−8.2 / −7.5 kcal/mol in one observed case), because the job wrapper only checks
-that the `.dsd` file is non-empty. Nothing in the exit code, the log, or the
-presence of output files reveals that the trajectory is meaningless.
-
-This is the same root cause as the finding this whole tool exists to encode —
-**sphere density is a property of the CAVER build, not of the protein** — and it
-propagates into every downstream tool that consumes a tunnel.
-
-**Re-space to ~1 Å before the discretizer, and assert the disk count** against
-the tunnel's length. A 2-disk `.dsd` from a 16 Å tunnel is a hard error, not a
-result.
-
-### The preparation is not the same as for D_IC
-
-Counter-intuitive, and easy to get backwards:
-
-| | truncate at the surface? | re-space? |
-|---|---|---|
-| **D_IC / O_IC** | **yes** — the exit *is* the measurement | yes, to a fixed arc length |
-| **CaverDock** | **no** — the ligand has to reach bulk solvent to leave | yes, to ~1 Å |
-
-The same chain needs two incompatible preparations, and feeding either tool the
-other's version produces output that looks entirely normal. Keep the raw chain
-alongside whatever you derive from it.
-
-### Crystal ligands often do not match their PDB chemical component
-
-Meeko needs bond orders, hydrogens and formal charges; a ligand copied out of a
-crystal structure has none of them. Matching the component's ideal SDF onto the
-coordinates with RDKit's `AssignBondOrdersFromTemplate` supplies them — but only
-if the atom counts agree. In 3A5R the HC4 ligand has **11 of the component's 12
-heavy atoms** (one carboxyl oxygen unmodelled), the match fails, and chemistry
-falls back to geometry-based bond inference. Docking energies depend on the atom
-typing that follows, so record which route each ligand took and discount the
-fallbacks rather than treating all the numbers alike.
-
-## Ranking tunnels with CaverDock: cost is driven by the search
-
-Runtime is set by the upper-bound search, not by the size of the input.
-Measured over six runs on one project, elapsed time spanned **19x** (under
-6 min to nearly 2 h) and the slowest run was on the **shortest** tunnel in the
-set. Neither tunnel length, disk count nor ligand size predicted it.
-
-So **do not price a batch from a median**. Report the distribution and size the
-batch from the tail. Cost rises steeply with ligand flexibility rather than
-with ligand size, so price the most flexible ligand in the set first.
-
-`--final_state LB` stops after the lower bound and is ~8x cheaper, but the
-lower bound optimises each disk independently, so **its maximum is not a
-barrier the ligand must continuously cross** -- which is the quantity one would
-be ranking tunnels by. Reasonable as a cheap pre-filter over many tunnels; not
-a substitute for the upper bound in a result.
-
-**Output-file age is not a liveness signal.** CaverDock writes nothing for the
-whole smoothed upper-bound phase, which is the great majority of a run, so a
-healthy job can look stalled for hours. If it runs behind a wrapper that
-mirrors results on a timer, the output directory also looks fresh when the tool
-is producing nothing. Judge progress from the tool's own log
-(`cScheduler::step(): conformations computed: ...`), never from file
-timestamps.

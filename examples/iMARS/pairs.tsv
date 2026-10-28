@@ -17,35 +17,24 @@
 #			and most of its constructs put STS first in the chain. Not a
 #			contradiction: which end of the fusion an enzyme sits at says
 #			nothing about which direction the intermediate travels.
-#	branches	which tunnel source each side STARTS from, per enzymes.tsv.
-#			"mixed" means one enzyme of the pair is annotated in ChannelsDB
-#			and the other is not, so one tunnel is fetched and the other
-#			computed inside a single pair file.
 #
-#			It is not where the tunnel ends up coming from. A fetched chain
-#			that stops before the surface is handed to CAVER instead, seeded
-#			from the site the database identified, so most "channelsdb"
-#			sides here actually resolve to a seeded CAVER run. The `resolved`
-#			column of report.tsv records what really produced each tunnel,
-#			and `recovery` whether the seeded run found the annotated route.
-#
-prefix	upstream	downstream	branches	constructs
-iMARS_01_4CL-STS	4CL	STS	mixed	STS-L309-4CL,4CL-L880-STS,STS-L637-4CL,4CL-L300-STS,4CL-L926-STS,4CL-L708-STS,STS-L502-4CL,STS-L836-4CL,STS-L30-4CL,STS-L44-4CL,4CL-L43-STS,4CL-L49-STS,STS-L35-4CL,4CL-L35-STS,4CL-L50-STS
-iMARS_02_GPPS-MYS	GPPS	MYS	channelsdb	GPPS-L11-MYS
-iMARS_03_GPPS-LIC	GPPS	LIC	channelsdb	GPPS-L17-LIC
-iMARS_04_GPPS-OCS	GPPS	OCS	channelsdb	GPPS-L7-OCS
-iMARS_05_4pOMT-7OMT	4'OMT	7OMT	mixed	7OMT-L64-4'OMT
-iMARS_06_4CL-BAS	4CL	BAS	channelsdb	4CL-L24-BAS
-iMARS_07_4pOMT-REPI	4'OMT	REPI	channelsdb	4'OMT-L15-REPI
-iMARS_08_GGPPS-TS	GGPPS	TS	channelsdb	GGPPS-L70-TS,TS-L92-GGPPS
-iMARS_09_ERG20-NES	ERG20	NES	channelsdb	NES-L46-ERG20
-iMARS_10_ERG20-SQS	ERG20	SQS	channelsdb	ERG20-L96-SQS
-iMARS_11_ERG20-ADS	ERG20	ADS	channelsdb	ERG20-L24-ADS
-iMARS_12_4CL-RAS	4CL	RAS	channelsdb	4CL-L42-RAS
-iMARS_13_ERG20-GGPPS	ERG20	GGPPS	channelsdb	GGPPS-L29-ERG20
-iMARS_14_GGPPS-AS	GGPPS	AS	channelsdb	AS-L93-GGPPS
-iMARS_15_4CL-CHS	4CL	CHS	channelsdb	4CL-L15-CHS
-iMARS_16_GPPS-GES	GPPS	GES	channelsdb	GES-L69-GPPS
-iMARS_17_4pOMT-RNMT	4'OMT	RNMT	channelsdb	RNMT-L75-4'OMT
-iMARS_18_4CL-CUS	4CL	CUS	mixed	CUS-L80-4CL
-iMARS_19_ERG20-BBS	ERG20	BBS	channelsdb	BBS-L74-ERG20,ERG20-L93-BBS
+prefix	upstream	downstream	constructs
+iMARS_01_4CL-STS	4CL	STS	STS-L309-4CL,4CL-L880-STS,STS-L637-4CL,4CL-L300-STS,4CL-L926-STS,4CL-L708-STS,STS-L502-4CL,STS-L836-4CL,STS-L30-4CL,STS-L44-4CL,4CL-L43-STS,4CL-L49-STS,STS-L35-4CL,4CL-L35-STS,4CL-L50-STS
+iMARS_02_GPPS-MYS	GPPS	MYS	GPPS-L11-MYS
+iMARS_03_GPPS-LIC	GPPS	LIC	GPPS-L17-LIC
+iMARS_04_GPPS-OCS	GPPS	OCS	GPPS-L7-OCS
+iMARS_05_4pOMT-7OMT	4'OMT	7OMT	7OMT-L64-4'OMT
+iMARS_06_4CL-BAS	4CL	BAS	4CL-L24-BAS
+iMARS_07_4pOMT-REPI	4'OMT	REPI	4'OMT-L15-REPI
+iMARS_08_GGPPS-TS	GGPPS	TS	GGPPS-L70-TS,TS-L92-GGPPS
+iMARS_09_ERG20-NES	ERG20	NES	NES-L46-ERG20
+iMARS_10_ERG20-SQS	ERG20	SQS	ERG20-L96-SQS
+iMARS_11_ERG20-ADS	ERG20	ADS	ERG20-L24-ADS
+iMARS_12_4CL-RAS	4CL	RAS	4CL-L42-RAS
+iMARS_13_ERG20-GGPPS	ERG20	GGPPS	GGPPS-L29-ERG20
+iMARS_14_GGPPS-AS	GGPPS	AS	AS-L93-GGPPS
+iMARS_15_4CL-CHS	4CL	CHS	4CL-L15-CHS
+iMARS_16_GPPS-GES	GPPS	GES	GES-L69-GPPS
+iMARS_17_4pOMT-RNMT	4'OMT	RNMT	RNMT-L75-4'OMT
+iMARS_18_4CL-CUS	4CL	CUS	CUS-L80-4CL
+iMARS_19_ERG20-BBS	ERG20	BBS	BBS-L74-ERG20,ERG20-L93-BBS

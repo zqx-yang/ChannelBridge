@@ -11,7 +11,7 @@ protein surface it kept going. Measured on the same GDH structure, the same
 config and the same seed, with two CAVER builds:
 
 ================================  =================  ===================
-property                          build A (p5d)      build B (cluster)
+property                          build A (earlier)  build B (cluster)
 ================================  =================  ===================
 spheres in cluster 1              16                 145
 mean sphere spacing               0.98 A             0.17 A

@@ -9,13 +9,14 @@ geometry whose right answer is known by construction.
 from __future__ import annotations
 
 import math
+import re
 import xml.dom.minidom
 from typing import ClassVar
 
 import numpy as np
 import pytest
 
-from channelbridge.render.style import DEFAULT_STYLE, RenderStyle
+from channelbridge.render.style import DEFAULT_STYLE, RenderStyle, rgb_to_hex
 from channelbridge.render.svg import (
     AngleMarker,
     Mouth,
@@ -233,7 +234,7 @@ class TestPlaceBlock:
         assert p.overlap < 0.2, "a block should not be parked on the protein"
 
     def test_a_vertical_line_still_has_two_sides(self):
-        # the p5c slope test divides by zero here; the normal-based one does not
+        # the earlier slope test divides by zero here; the normal-based one does not
         up, dn = np.array([300.0, 60.0]), np.array([300.0, 340.0])
         a = place_block(self.alpha, up, dn, 100, 30, True, clearance=10)
         b = place_block(self.alpha, up, dn, 100, 30, False, clearance=10)
@@ -542,7 +543,7 @@ class TestFocusOutline:
 class TestMouthRing:
     """An exit that does not reach the silhouette's rim gets a drawn opening.
 
-    On the p6a pose the downstream channel leaves at 58 degrees to the view
+    On the worked example's pose the downstream channel leaves at 58 degrees to the view
     plane -- it points at the camera -- so its exit projects 31 px INSIDE the
     traced outline. There is no gap to cut, and without a ring the D_IC line
     appears to stop in the middle of the channel for no reason. The upstream
@@ -593,7 +594,7 @@ class TestMouthRing:
 class TestTheArmMustBeMeasuredOnARolledFrame:
     """`angle_marker` without `axis_px` assumes the P1-P2-P3 plane is face-on.
 
-    That holds in the angle frame and nowhere else. On the p6a pose rolled
+    That holds in the angle frame and nowhere else. On the worked example's pose rolled
     160 degrees about the arm, the fallback drew the arm at -151 deg where
     the session has it at -180 -- 29 deg of pure invention, while still
     showing the correct 165 deg BETWEEN arm and line, which is what made it
@@ -627,3 +628,50 @@ class TestTheArmMustBeMeasuredOnARolledFrame:
         with pytest.raises(ValueError, match="zero length"):
             angle_marker((100.0, 100.0), (200.0, 120.0), 165.0, 110.0, 150.0,
                          axis_px=(0.0, 0.0))
+
+
+class TestTheChannelAndTheMeasurementReadTheirOwnRoles:
+    """`tunnel` colours the channel, `annotation` the D_IC/O_IC marks.
+
+    They hold the same magenta by design, so these assertions are about
+    which ROLE each element consults, not about the values. That matters:
+    while the two briefly differed, this caught a call site that had mixed
+    them up for as long as they were both red -- the PNG preview drew the
+    channel OUTLINE with the annotation colour. A shared value hides that
+    class of bug, so the roles stay separate and are checked separately.
+    """
+
+    def _doc(self):
+        return TestDocument().doc()
+
+    def test_the_channel_is_the_tunnel_colour(self):
+        d = self._doc()
+        tunnel = rgb_to_hex(DEFAULT_STYLE.palette.rgb("tunnel"))
+        fill = re.search(r'id="tunnel_fill_0"[^/]*fill="([^"]+)"', d)
+        assert fill and fill.group(1) == tunnel
+        # this layout's two mouths may consume the whole outline, so the
+        # outline runs are optional -- but any that IS drawn is the channel
+        outlines = re.findall(r'id="tunnel_outline_\d+_\d+"[^/]*stroke="([^"]+)"', d)
+        assert all(c == tunnel for c in outlines)
+
+    def test_the_measurement_is_the_annotation_colour(self):
+        d = self._doc()
+        annot = rgb_to_hex(DEFAULT_STYLE.palette.rgb("annotation"))
+        for pat in (r'id="channel_line"[^/]*stroke="([^"]+)"',
+                    r'id="exit_upstream"[^/]*fill="([^"]+)"',
+                    r'id="exit_downstream"[^/]*fill="([^"]+)"'):
+            m = re.search(pat, d)
+            assert m, pat
+            assert m.group(1) == annot, pat
+
+    def test_an_override_of_one_does_not_move_the_other(self):
+        """The proof that these are two roles and not one."""
+        from channelbridge.render.style import Palette
+
+        style = RenderStyle(palette=Palette().with_overrides(
+            {"annotation": (0.0, 0.0, 0.0)}))
+        d = TestDocument().doc(style=style)
+        assert re.search(r'id="channel_line"[^/]*stroke="#000000"', d)
+        tunnel = rgb_to_hex(style.palette.rgb("tunnel"))
+        fill = re.search(r'id="tunnel_fill_0"[^/]*fill="([^"]+)"', d)
+        assert fill and fill.group(1) == tunnel != "#000000"

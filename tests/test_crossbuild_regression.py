@@ -105,7 +105,7 @@ class TestTheFix:
         return {k: v.normalised(protein, spacing=1.0) for k, v in raw.items()}
 
     def test_the_recorded_p5_burial_is_reproduced(self, raw, protein):
-        # The P5 acceptance table records burial_exit 21 for this cluster.
+        # The the earlier acceptance table records burial_exit 21 for this cluster.
         assert raw["p5"].burial_exit(protein) == pytest.approx(21, abs=1)
 
     def test_the_normalised_exits_agree_within_two_angstroms(self, norm):

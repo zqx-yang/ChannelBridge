@@ -510,7 +510,7 @@ def place_block(alpha, p_up, p_dn, width: float, height: float, above: bool,
     """Put a text block where it hides the least protein, on one side of the line.
 
     "Above" and "below" are taken perpendicular to the channel line, not in
-    screen y: a near-vertical line has no above, and the p5c script's
+    screen y: a near-vertical line has no above, and the earlier script's
     ``slope``-based test degenerates there. Using the line's own normal --
     oriented so that it points up on the screen -- keeps the two blocks on
     opposite sides whatever the angle, which is what the figure needs.
@@ -1000,7 +1000,13 @@ def write_preview(out_png, base_png, layout: _Layout, values: Mapping,
     for poly in layout.polys:
         for run in open_runs(poly, mouths, svg_style.mouth_open_factor,
                              svg_style.mouth_open_back):
-            d.line([tuple(float(x) for x in q) for q in run], fill=(*annot, 255), width=sw)
+            # the channel outline, so `tunnel` -- the SVG uses `tunnel` here
+            # and the preview used `annot`. Invisible while the two roles
+            # were the same red; the moment the annotation went magenta the
+            # preview started showing a magenta channel the SVG does not
+            # have, which is the whole point of a preview being wrong.
+            d.line([tuple(float(x) for x in q) for q in run],
+                   fill=(*tunnel, 255), width=sw)
     up, dn = layout.mouths["up"], layout.mouths["dn"]
     d.line([tuple(up.centre), tuple(dn.centre)], fill=(*annot, 255), width=sw)
     for m in (up, dn):

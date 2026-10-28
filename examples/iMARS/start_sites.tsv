@@ -1,0 +1,12 @@
+enzyme	family	route	chain	residues	evidence
+4CL	homolog	homolog-5BSM	A	210,211,212,213,258,329,330,331,332,352,353,354,355,356,357,358,381,439,441,453,456,547	22 residue(s) lining ATP mapped from 5BSM chain A (74% identity, 529 pairs aligned, 443 kept, RMSD 0.48 A)
+AS	terpene	terpene-motifs	A	621,622,623,624,625,765,766,767,768,769,770,771,772,773	DDxxD DDLYD at 621; NSE/DTE NDTKTYQAE at 765
+CHS	pks	pks-triad	A	164,303,336	catalytic triad by geometry: Cys164, His303 at 3.7 A, Asn336 at 4.2 A
+CUS	pks	pks-triad	A	174,316,349	catalytic triad by geometry: Cys174, His316 at 3.7 A, Asn349 at 4.4 A
+GGPPS	homolog	homolog-2E8T	A	90,91,94,95,97,98,101,102,107,130,158,161,162,165,168,192,193,196,229,232,233,246,251,256	24 residue(s) lining FPS mapped from 2E8T chain A (99% identity, 297 pairs aligned, 291 kept, RMSD 0.35 A)
+GPPS	homolog	homolog-3KRF	A	164,165,168,169,174,176,179,238,242,245,266,267,331	13 residue(s) lining DST mapped from 3KRF chain D (64% identity, 294 pairs aligned, 205 kept, RMSD 0.47 A)
+NES	terpene	terpene-motifs	A	273,274,275,276,277,417,418,419,420,421,422,423,424,425	DDxxD DDIFD at 273; NSE/DTE DDLGSAKDE at 417
+RAS	homolog	homolog-5FAL	A	152,156,157,158,234,247,248,249,250,277,278,279,280,296,324,363,364,365,366,367,368	21 residue(s) lining COA mapped from 5FAL chain A (52% identity, 419 pairs aligned, 369 kept, RMSD 0.89 A)
+REPI	homolog	homolog-1ZGD	A	601,602,603,604,630,631,635,665,698,699,744,745,766,792,793,794,795,796,797,798,800,802,808,823,825,829,840,841,842,843,844,848,851,852,877	35 residue(s) lining NAP mapped from 1ZGD chain A (52% identity, 302 pairs aligned, 238 kept, RMSD 0.55 A)
+SQS	homolog	homolog-3WEF	A	18,19,20,21,22,26,37,40,41,44,45,48,51,52,121,125,144,148,149,152,153,156,160,173,176,177,180,181,184,188,195,223,235,236	34 residue(s) lining FPS mapped from 3WEF chain A (33% identity, 235 pairs aligned, 158 kept, RMSD 1.13 A)
+STS	pks	pks-triad	A	162,301,334	catalytic triad by geometry: Cys162, His301 at 3.7 A, Asn334 at 4.2 A

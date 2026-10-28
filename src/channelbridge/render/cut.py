@@ -35,7 +35,7 @@ def section_plane(p2, p3, view_direction):
 
     **Use this for the normal, not usually for the point.** One plane at the
     midpoint cuts both enzymes only if they sit at the same depth along the
-    view axis, and they generally do not: on the p6a GDH-FNR pose the shared
+    view axis, and they generally do not: on the worked GDH-FNR pose the shared
     plane left GDH with 1296 of 1971 atoms but FNR with 234 of 2352 -- 90 %
     of the downstream enzyme deleted, leaving a sliver that reads as no
     section at all. :func:`enzyme_section_point` places each enzyme's plane at

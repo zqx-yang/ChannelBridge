@@ -36,6 +36,7 @@ __all__ = [
     "dic_equivalent_of_oic",
     "do_score",
     "o_ic",
+    "superpose",
 ]
 
 
@@ -274,3 +275,34 @@ def geometry_from_exits(
     d = d_ic(upstream_exit, downstream_exit)
     o = o_ic(upstream_arm_point, upstream_exit, downstream_exit)
     return d, o, do_score(d, o, coeffs)
+
+
+def superpose(mobile, target) -> Tuple[np.ndarray, np.ndarray, float]:
+    """The rigid-body transform taking *mobile* onto *target*, by Kabsch.
+
+    Both are ``(N, 3)`` and must already be in matching order -- this solves
+    the transform, it does not find the correspondence. Returns
+    ``(R, t, rmsd)``, applied as ``xyz @ R.T + t``.
+
+    A reflection is never returned: the determinant is forced to +1, because
+    the best-fitting *improper* transform of a protein onto its own copy is
+    not a placement anything can be built from, and letting one through turns
+    a wrongly-paired correspondence into a plausible-looking answer.
+    """
+    mobile = np.atleast_2d(np.asarray(mobile, float))
+    target = np.atleast_2d(np.asarray(target, float))
+    if mobile.shape != target.shape:
+        raise ValueError("superpose needs matching shapes, got %r and %r"
+                         % (mobile.shape, target.shape))
+    if len(mobile) < 3:
+        raise ValueError(
+            "superpose needs at least 3 point pairs to fix a rotation, got %d"
+            % len(mobile))
+    cm, ct = mobile.mean(axis=0), target.mean(axis=0)
+    h = (mobile - cm).T @ (target - ct)
+    u, _s, vt = np.linalg.svd(h)
+    d = np.sign(np.linalg.det(vt.T @ u.T)) or 1.0
+    rot = vt.T @ np.diag([1.0, 1.0, d]) @ u.T
+    trans = ct - rot @ cm
+    rmsd = float(np.sqrt((((mobile @ rot.T + trans) - target) ** 2).sum(1).mean()))
+    return rot, trans, rmsd

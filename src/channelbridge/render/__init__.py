@@ -1,6 +1,6 @@
 """Figures: channel-aware .pse sessions and editable SVGs.
 
-Follows the conventions the p5a/p5b/p5c figure sessions settled on: one .pse
+Follows the conventions the figure sessions this package grew out of settled on: one .pse
 per camera frame with every variant as an object plus a PyMOL scene, and ONE
 editable SVG per view rather than a set of PNGs. The camera moves, never the
 coordinates of a posed complex.

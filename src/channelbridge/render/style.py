@@ -1,6 +1,6 @@
 """Colours and render settings for channel figures, all overridable.
 
-The defaults are the look the p5a/p5b/p5c figure sessions settled on:
+The defaults are the look the figure sessions this package grew out of settled on:
 ray-traced with a black outline on a flat background, surfaces lightened so
 the outline reads against them, cofactors as unlightened magenta sticks.
 Every one of them can be replaced from a pair file or the command line --
@@ -13,7 +13,7 @@ overriding them:
   ``c + (1 - c) * L``. With a saturated surface the black outline of
   ``ray_trace_mode 1`` disappears into it. If you set a dark colour, raise
   its ``lighten`` too.
-* **Both enzymes at 65 % transparency, nothing opaque.** The p5b/p5c rule was
+* **Both enzymes at 65 % transparency, nothing opaque.** The rule the earlier figure sessions settled on was
   "designed chain opaque, everything else 65 %", but a posed enzyme pair has
   no designed binder yet. Leaving both transparent makes the channel geometry
   the subject and removes the occlusion-clipping step, which exists only
@@ -208,19 +208,45 @@ class ColorSpec:
         return cls(parse_color(spec), keep)
 
 
+#: Role pairs that share a colour on purpose, and are therefore not reported
+#: as hard to tell apart. The channel and its measurement are both magenta:
+#: everything to do with the channel is one colour, which is the point, and
+#: the fill, the outline and the D_IC/O_IC marks are never confusable shapes.
+SAME_BY_DESIGN = frozenset({frozenset(("tunnel", "annotation"))})
+
+
 def _default_entries() -> Dict[str, ColorSpec]:
     return {
         # upstream is drawn on the LEFT, downstream on the right
         "upstream": ColorSpec((0.0, 1.0, 0.0), 0.55),
         "downstream": ColorSpec((1.0, 0.5, 0.0), 0.50),
         "binder": ColorSpec(hex_to_rgb(DESIGNED_BINDER_HEX), 0.50),
-        # cofactors are not lightened: they must read through two surfaces
-        "ligand": ColorSpec((1.0, 0.0, 1.0), 0.0),
+        # Cofactors are not lightened: they must read through two surfaces.
+        # Purple, not the magenta they used to be: the D_IC/O_IC annotation
+        # took pure magenta on 2026-10-27 and the two were then the same
+        # colour to the channel-difference check and to a reader. Purple is
+        # already in this project's palette, keeps the cofactor a hue no
+        # protein role uses, and leaves the measurement the colour it was
+        # asked for.
+        "ligand": ColorSpec((0.55, 0.1, 0.9), 0.0),
         "copy": ColorSpec((0.7, 0.7, 0.7), 0.45),
-        # the channel volume, never lightened: the 2D fill is drawn at 30 %
-        # opacity and has to stay recognisably red
-        "tunnel": ColorSpec((0.9, 0.05, 0.05), 0.0),
-        "annotation": ColorSpec((0.9, 0.05, 0.05), 0.0),
+        # MAGENTA: the channel volume, its 2D fill and its outline. Never
+        # lightened -- the fill is drawn at 30 % opacity and has to stay
+        # recognisable. (user, 2026-10-27.)
+        "tunnel": ColorSpec((1.0, 0.0, 1.0), 0.0),
+        # The D_IC line, the exit dots, the O_IC arm, arrowhead and arc, and
+        # the segment names. The same magenta as `tunnel`, because everything
+        # to do with the channel is one colour and the measurement is part of
+        # the channel's story (user, 2026-10-27). It is still its own role:
+        # the two are read separately everywhere, so either can be moved
+        # without touching the other, and one call site that confused them
+        # was only found because they briefly differed.
+        "annotation": ColorSpec((1.0, 0.0, 1.0), 0.0),
+        # The hotspot patch THIS pose bridges: RED, so the epitope and the
+        # channel cannot be mistaken for each other. Its own role rather than
+        # borrowed from `annotation`, which is what it used to take.
+        # (user, 2026-10-27.)
+        "patch": ColorSpec((0.9, 0.05, 0.05), 0.0),
     }
 
 
@@ -279,11 +305,19 @@ class Palette:
         A warning, not an error -- someone may want two greys on purpose.
         Compared on the sum of absolute channel differences of the *final*
         colours, because that is what ends up in the figure.
+
+        Pairs in :data:`SAME_BY_DESIGN` are skipped. That list used to be the
+        whole ``annotation`` role, excluded because it was the same red as
+        the channel it was drawn on; now that the annotation is magenta the
+        exclusion would hide a real collision, so only the pair that IS
+        deliberately one colour is named.
         """
-        check = list(roles) or [r for r in self.roles if r != "annotation"]
+        check = list(roles) or self.roles
         out = []
         for i, a in enumerate(check):
             for b in check[i + 1 :]:
+                if frozenset((a, b)) in SAME_BY_DESIGN:
+                    continue
                 ca, cb = self.rgb(a), self.rgb(b)
                 if sum(abs(x - y) for x, y in zip(ca, cb)) < min_sep:
                     out.append("%s/%s" % (a, b))
@@ -298,7 +332,7 @@ def _default_transparency() -> Dict[str, float]:
     # in the scenes meant for LOOKING AT a structure (classes, occupancy,
     # the hotspot map) rather than for illustrating it. They were solid at
     # first, which hid the cofactors the patches are positioned against; 0.55
-    # is the value the p5d map script uses for the same job.
+    # is the value the earlier map script uses for the same job.
     return {"tunnel": 0.75, "inspect": 0.55}
 
 
@@ -449,7 +483,7 @@ class RenderStyle:
 
         With nothing opaque the tunnel outline can be drawn straight over the
         protein raster. An opaque chain in front of it has to be subtracted
-        from the overlay (the ``occ=`` step of the p5c SVG script), so the
+        from the overlay (the ``occ=`` step of the earlier SVG script), so the
         caller needs to know.
         """
         return any(self.transparency.is_opaque(r) for r in self.palette.roles)
@@ -515,8 +549,8 @@ RAY_SETTINGS: Dict[str, object] = {
 #: residue classes under a translucent surface and the outlines turn it into
 #: a dark mess -- the single most-reported defect of that session.
 #:
-#: These are PyMOL's own defaults plus the two settings the p5d map script
-#: actually sets. Verified by reading the settings back out of a p5d session:
+#: These are PyMOL's own defaults plus the two settings the earlier map script
+#: actually sets. Verified by reading the settings back out of a earlier session:
 #: ray_trace_mode 0, ambient 0.14, direct 0.45, reflect 0.45, specular 1.0,
 #: ray_shadows on, depth_cue on. Shadows and depth cue are what give the
 #: surfaces their shape once the outlines are gone.

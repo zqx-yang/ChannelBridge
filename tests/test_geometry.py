@@ -26,7 +26,7 @@ class TestDOEquation:
         assert DO_PUBLISHED.c == 0.7865
 
     def test_reproduces_the_recorded_p5_geom001(self):
-        # The P5 record: D_IC 16.0 A, O_IC 150 deg -> DO 0.8401.
+        # The earlier reference: D_IC 16.0 A, O_IC 150 deg -> DO 0.8401.
         assert do_score(16.0, 150.0) == pytest.approx(0.8401, abs=5e-5)
 
     def test_reproduces_the_recorded_runner_up(self):
@@ -42,7 +42,7 @@ class TestDOEquation:
         # The iMARS Figure 2C/ST2G and ST2A constants disagree. Over the grid
         # this pipeline actually scans (D_IC 6-36 A, O_IC 90-180 deg) the worst
         # case is 0.032 at the short-and-straight corner, which is larger than
-        # the 0.024 quoted in the P5 notes -- so the choice of constants is
+        # the 0.024 quoted in the earlier notes -- so the choice of constants is
         # recorded with every DO rather than assumed negligible.
         per_pose = {
             (d, o): abs(do_score(d, o, DO_PUBLISHED) - do_score(d, o, DO_ST2A))
@@ -124,7 +124,7 @@ class TestGeometryFromExits:
 class TestOicIsOneSided:
     """O_IC measures the DONOR channel's aim and nothing else.
 
-    Measured on the p6a GDH-FNR pose: O_IC 165 deg at the upstream exit, but
+    Measured on the worked GDH-FNR pose: O_IC 165 deg at the upstream exit, but
     the same angle at the downstream exit is 90 deg -- the receiving mouth
     opens sideways to the line joining the two exits. DO cannot see that, so
     two geometries that differ entirely in whether the acceptor faces the
@@ -207,3 +207,51 @@ class TestYourOwnScore:
 
         for c in (DO_PUBLISHED, DO_EXACT):
             assert c.extra == {} and c.is_published
+
+
+class TestSuperpose:
+    """Shared by the occupancy copies and the partner footprint."""
+
+    def _cloud(self, n=40, seed=0):
+        return np.random.default_rng(seed).normal(scale=10.0, size=(n, 3))
+
+    def test_recovers_a_known_transform(self):
+        from channelbridge.geometry import superpose
+        from channelbridge.reference_pose import rotation_about
+
+        p = self._cloud()
+        rot = rotation_about([0.3, 0.5, 0.8], 47.0)
+        trans = np.array([3.0, -2.0, 7.0])
+        back, shift, rmsd = superpose(p, p @ rot.T + trans)
+        assert back == pytest.approx(rot, abs=1e-9)
+        assert shift == pytest.approx(trans, abs=1e-9)
+        assert rmsd == pytest.approx(0.0, abs=1e-9)
+
+    def test_never_returns_a_reflection(self):
+        """A mirror image is not a placement anything can be built from."""
+        from channelbridge.geometry import superpose
+
+        p = self._cloud(seed=1)
+        mirrored = p * np.array([1.0, 1.0, -1.0])
+        rot, _t, _rmsd = superpose(p, mirrored)
+        assert float(np.linalg.det(rot)) == pytest.approx(1.0, abs=1e-9)
+
+    def test_rmsd_is_reported_not_hidden(self):
+        from channelbridge.geometry import superpose
+
+        p = self._cloud(seed=2)
+        noisy = p + np.random.default_rng(3).normal(scale=0.5, size=p.shape)
+        _r, _t, rmsd = superpose(p, noisy)
+        assert 0.1 < rmsd < 2.0
+
+    def test_too_few_points_to_fix_a_rotation(self):
+        from channelbridge.geometry import superpose
+
+        with pytest.raises(ValueError, match="at least 3"):
+            superpose(np.zeros((2, 3)), np.ones((2, 3)))
+
+    def test_mismatched_shapes_are_refused(self):
+        from channelbridge.geometry import superpose
+
+        with pytest.raises(ValueError, match="matching shapes"):
+            superpose(np.zeros((5, 3)), np.ones((6, 3)))

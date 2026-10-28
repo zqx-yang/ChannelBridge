@@ -209,7 +209,7 @@ class TestEnzymeSectionPoint:
 
     A single plane through the midpoint of the two exits cuts both enzymes
     equally only if they sit at the same depth along the view axis. On the
-    real p6a GDH-FNR pose they do not: the shared plane kept 1296/1971 atoms
+    real the worked example's GDH-FNR pose they do not: the shared plane kept 1296/1971 atoms
     of GDH but only 234/2352 of FNR -- 90 % of the downstream enzyme deleted,
     which reads as no section at all.
     """

@@ -52,6 +52,24 @@ class TestScanOutput:
         assert g.occupancy_pdb and g.occupancy_pdb.endswith("_occupancy.pdb")
         assert g.pse and g.pse.endswith(".pse")
 
+    def test_a_run_prefix_does_not_hide_the_poses(self, tmp_path):
+        """`chbridge pose --prefix` puts a prefix in front of every file.
+
+        Anchoring the id at the start of the name turned a folder full of
+        complexes into an empty search, which looks exactly like a pose
+        stage that found nothing.
+        """
+        for _pid, stem in STEMS:
+            (tmp_path / ("iMARS_01_4CL-STS_" + stem + "_complex.pdb")).write_text("END\n")
+        found = scan_output(str(tmp_path))
+        assert [g.pose_id for g in found] == ["geom001", "geom002", "geom003"]
+        assert found[0].do == pytest.approx(0.850)
+        assert found[0].stem.startswith("iMARS_01_4CL-STS_")
+
+    def test_geom_in_a_prefix_word_is_not_an_id(self, tmp_path):
+        (tmp_path / "geometry_notes_complex.pdb").write_text("END\n")
+        assert scan_output(str(tmp_path)) == []
+
     def test_a_pose_without_a_complex_is_not_a_pose(self, tmp_path):
         (tmp_path / "geom009_DO0.5_whatever.pml").write_text("x")
         assert scan_output(str(tmp_path)) == []
@@ -231,26 +249,26 @@ class TestOutputNames:
         # after; one map per enzyme pair
         from channelbridge.figures import hotspot_map_name
 
-        assert hotspot_map_name("p6a") == "p6a_hotspot-map.pse"
+        assert hotspot_map_name("run1") == "run1_hotspot-map.pse"
 
     def test_a_session_is_prefix_pose_render(self):
         from channelbridge.figures import session_name
 
-        assert session_name("p6a", "geom001") == "p6a_geom001_render.pse"
+        assert session_name("run1", "geom001") == "run1_geom001_render.pse"
 
     def test_each_variant_gets_its_own_svg(self):
         from channelbridge.figures import svg_name
 
-        assert svg_name("p6a", "geom001", "pair") == "p6a_geom001_render_pair.svg"
-        assert (svg_name("p6a", "geom001", "assembly")
-                == "p6a_geom001_render_assembly.svg")
+        assert svg_name("run1", "geom001", "pair") == "run1_geom001_render_pair.svg"
+        assert (svg_name("run1", "geom001", "assembly")
+                == "run1_geom001_render_assembly.svg")
 
     def test_helpers_keep_the_prefix_so_two_runs_do_not_share_them(self):
         from channelbridge.figures import helper_name
 
-        assert helper_name("p6a", "geom001", "mask") == "p6a_geom001_mask.png"
-        assert (helper_name("p6a", "geom001", "mask_assembly")
-                == "p6a_geom001_mask_assembly.png")
+        assert helper_name("run1", "geom001", "mask") == "run1_geom001_mask.png"
+        assert (helper_name("run1", "geom001", "mask_assembly")
+                == "run1_geom001_mask_assembly.png")
 
     def test_a_structure_copied_out_keeps_its_whole_geometry(self):
         # a .pdb is handed to a colleague or a generator, so it carries the
@@ -258,7 +276,7 @@ class TestOutputNames:
         from channelbridge.figures import complex_name
 
         stem = "geom001_DO0.850_d017.0_o165_GDHp4-FNRp1_az000_ti090_sp240_ok"
-        assert complex_name("p6a", stem) == "p6a_%s_complex.pdb" % stem
+        assert complex_name("run1", stem) == "run1_%s_complex.pdb" % stem
 
     def test_a_dotted_pose_id_survives_the_names(self):
         # the DO-sampled ids carry decimals (DO0.870_d010.0); the user chose
@@ -266,8 +284,8 @@ class TestOutputNames:
         from channelbridge.figures import session_name, svg_name
 
         pid = "geom001_DO0.870_d010.0_o135_p3-p1_az000_ti030_sp270_ok"
-        assert session_name("p6a", pid).endswith("_ok_render.pse")
-        assert svg_name("p6a", pid, "pair").endswith("_ok_render_pair.svg")
+        assert session_name("run1", pid).endswith("_ok_render.pse")
+        assert svg_name("run1", pid, "pair").endswith("_ok_render_pair.svg")
 
 
 class TestABuildWritesWhereTheNamingSays:
@@ -287,5 +305,53 @@ class TestABuildWritesWhereTheNamingSays:
                       pse=str(tmp_path / "geom001_DO0.850_ok.pse"))
         plan = resolve([("geom001", 0.85)], pse="rank1")
         made = build(plan, [g], str(tmp_path), runner=Runner(dry_run=True),
-                     prefix="p6a", report=lambda *_: None)
-        assert made["pse"] == [os.path.join(str(tmp_path), "p6a_geom001_render.pse")]
+                     prefix="run1", report=lambda *_: None)
+        assert made["pse"] == [os.path.join(str(tmp_path), "run1_geom001_render.pse")]
+
+
+class TestOnePoseIdIsOnePose:
+    """Two complexes for one geom id is an error, not a sort-order question.
+
+    The pose stage encodes the geometry in the file NAME, so re-running a
+    search over a folder that already holds one leaves both files: same pose
+    id, different pose, different structure, nothing overwritten and nothing
+    said. Whichever won then became "geom001" for the figures and the
+    generator -- and `--pse top1` selects by DO, so the SUPERSEDED pose won
+    wherever it scored higher. Measured on the iMARS set: 36 stale complexes
+    across 17 pairs, several computed on structures the set no longer uses,
+    and a design spec built from one of them.
+    """
+
+    def _complex(self, d, name):
+        (d / name).write_text("END\n", encoding="utf-8")
+
+    def test_one_complex_per_id_is_fine(self, tmp_path):
+        from channelbridge.figures import scan_output
+
+        self._complex(tmp_path, "p_geom001_DO0.856_d014.0_o150_ok_complex.pdb")
+        self._complex(tmp_path, "p_geom002_DO0.800_d016.0_o150_ok_complex.pdb")
+        got = scan_output(str(tmp_path))
+        assert [g.pose_id for g in got] == ["geom001", "geom002"]
+
+    def test_two_complexes_for_one_id_are_refused(self, tmp_path):
+        from channelbridge.figures import scan_output
+
+        self._complex(tmp_path, "p_geom001_DO0.856_d014.0_o150_ok_complex.pdb")
+        self._complex(tmp_path, "p_geom001_DO0.874_d014.0_o165_ok_complex.pdb")
+        with pytest.raises(ValueError) as exc:
+            scan_output(str(tmp_path))
+        msg = str(exc.value)
+        assert "two different poses called geom001" in msg
+        # both names are shown, so the reader can tell which to delete
+        assert "DO0.856" in msg and "DO0.874" in msg
+
+    def test_the_same_file_seen_twice_is_not_a_collision(self, tmp_path):
+        """A complex plus its own occupancy copy and .pse share one stem."""
+        from channelbridge.figures import scan_output
+
+        stem = "p_geom001_DO0.856_d014.0_o150_ok"
+        self._complex(tmp_path, stem + "_complex.pdb")
+        (tmp_path / (stem + "_occupancy.pdb")).write_text("END\n", encoding="utf-8")
+        (tmp_path / (stem + ".pse")).write_bytes(b"x")
+        got = scan_output(str(tmp_path))
+        assert len(got) == 1 and got[0].pose_id == "geom001"

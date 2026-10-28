@@ -110,7 +110,11 @@ DEFAULT_PYMOL = default_pymol()
 #: once per pose rather than once per SVG.
 SCENES_FOR_SVG = ("mask", "mouth", "footprint")
 
-_GEOM = re.compile(r"^(geom\d+)")
+#: The pose id inside a file name. NOT anchored at the start: `chbridge pose
+#: --prefix` puts a run prefix in front of everything it writes, so anchoring
+#: here made the figure stage silently find zero poses in a prefixed folder --
+#: a folder full of complexes, reported as an empty search.
+_GEOM = re.compile(r"(?:^|_)(geom\d+)(?=_|\.|$)")
 
 
 @dataclass
@@ -168,19 +172,43 @@ def scan_output(directory) -> List[GeomFiles]:
     A pose counts as present when it has a ``_complex.pdb``: that is what
     every downstream step reads, and a folder can hold a ``.pml`` for a pose
     whose structure was never written.
+
+    **Two complexes for one pose id is an error.** The pose stage encodes the
+    geometry in the file NAME, so re-running a search over a folder that
+    already holds one leaves both: ``geom001_DO0.874_...`` beside
+    ``geom001_DO0.856_...``, same pose id, different poses, different
+    structures. Nothing overwrote anything and nothing complained. Whichever
+    the dict happened to keep then became "geom001" for the figures and the
+    generator -- and with ``--pse top1`` the selection is by DO, so the
+    SUPERSEDED pose won wherever it scored higher. Measured on this set: 36
+    stale complexes across 17 pairs, several of them computed on structures
+    the set no longer uses. So the collision is named and refused here rather
+    than resolved by sort order.
     """
     directory = str(directory)
     if not os.path.isdir(directory):
         raise FileNotFoundError("no such output folder: %s" % directory)
     found: Dict[str, GeomFiles] = {}
+    seen: Dict[str, str] = {}
     for name in sorted(os.listdir(directory)):
-        m = _GEOM.match(name)
+        m = _GEOM.search(name)
         if not m:
             continue
         pid = m.group(1)
         path = os.path.join(directory, name)
         if name.endswith("_complex.pdb"):
             stem = name[: -len("_complex.pdb")]
+            if pid in seen and seen[pid] != stem:
+                raise ValueError(
+                    "%s holds two different poses called %s:\n  %s\n  %s\n"
+                    "The pose stage puts the geometry in the file name, so a "
+                    "re-run leaves the previous search's complexes beside the "
+                    "new ones and the pose id no longer identifies a pose. "
+                    "Delete the superseded files (or write the new search to "
+                    "its own folder) before reading this one."
+                    % (directory, pid, seen[pid] + "_complex.pdb",
+                       stem + "_complex.pdb"))
+            seen[pid] = stem
             g = found.setdefault(pid, GeomFiles(pid, stem, directory))
             g.stem = stem
             g.complex_pdb = path

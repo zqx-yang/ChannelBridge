@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -204,9 +205,9 @@ class TestSessionAndRenderAreSeparateSteps:
         out = tmp_path / "out"
         out.mkdir()
         (out / "geom001_complex.pdb").write_text("END\n", encoding="utf-8")
-        assert main(["session", str(out), "--prefix", "p6a", "--dry-run"]) == 0
+        assert main(["session", str(out), "--prefix", "run1", "--dry-run"]) == 0
         printed = capsys.readouterr().out
-        assert "p6a_geom001_render.pse" in printed
+        assert "run1_geom001_render.pse" in printed
 
     def test_render_refuses_a_session_that_is_not_there(self, tmp_path, capsys):
         rc = main(["render", str(tmp_path / "nope.pse"), "--dry-run"])
@@ -216,8 +217,145 @@ class TestSessionAndRenderAreSeparateSteps:
     def test_render_takes_any_session_and_names_both_variants(self, tmp_path, capsys):
         pse = tmp_path / "hand_rotated.pse"
         pse.write_bytes(b"not really a session")
-        assert main(["render", str(pse), "--prefix", "p6a",
+        assert main(["render", str(pse), "--prefix", "run1",
                      "--pose", "geom007", "--dry-run"]) == 0
         printed = capsys.readouterr().out
-        assert "p6a_geom007_render_pair.svg" in printed
-        assert "p6a_geom007_render_assembly.svg" in printed
+        assert "run1_geom007_render_pair.svg" in printed
+        assert "run1_geom007_render_assembly.svg" in printed
+
+
+class TestPseArgReachesTheSessionBuilder:
+    """``--pse-arg`` is passed on verbatim, one token per occurrence.
+
+    It was dropped in silence. `cmd_session` handed an ``action="append"``
+    list to a splitter written for a single comma-separated string, whose
+    ``if not value`` guard made the empty list falsy -- so every ``--pse-arg``
+    vanished and the session builder failed with "no chains given for the
+    upstream enzyme", naming neither the option nor the reason. Comma
+    splitting is wrong too: these are ``key=value`` tokens whose values
+    contain commas.
+    """
+
+    def _cmd(self, tmp_path, capsys, extra):
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "geom001_complex.pdb").write_text("END\n", encoding="utf-8")
+        assert main(["session", str(out), "--prefix", "p", "--dry-run",
+                     *extra]) == 0
+        return capsys.readouterr().out
+
+    def test_one_arg_arrives(self, tmp_path, capsys):
+        printed = self._cmd(tmp_path, capsys, ["--pse-arg", "up_chains=A"])
+        assert "up_chains=A" in printed
+
+    def test_a_value_may_contain_commas(self, tmp_path, capsys):
+        printed = self._cmd(tmp_path, capsys, ["--pse-arg", "up_chains=B,C,D,E"])
+        assert "up_chains=B,C,D,E" in printed
+
+    def test_the_option_is_repeatable(self, tmp_path, capsys):
+        printed = self._cmd(tmp_path, capsys,
+                            ["--pse-arg", "up_chains=A",
+                             "--pse-arg", "dn_chains=B",
+                             "--pse-arg", "ligands=FPP,GST"])
+        for want in ("up_chains=A", "dn_chains=B", "ligands=FPP,GST"):
+            assert want in printed
+
+    def test_case_is_not_changed(self, tmp_path, capsys):
+        printed = self._cmd(tmp_path, capsys, ["--pse-arg", "label=enz_GPPS"])
+        assert "label=enz_GPPS" in printed
+
+    def test_none_given_is_still_fine(self, tmp_path, capsys):
+        printed = self._cmd(tmp_path, capsys, [])
+        assert "p_geom001_render.pse" in printed
+
+
+class TestRenderLabelsComeFromTheSession:
+    """`render` must not label 0.0 just because nobody told it the numbers.
+
+    `--dic/--oic/--do` default to 0.0, which is a real-looking value, so a
+    render driven from a session alone published "D_IC = 0.0 A, O_IC = 0.0
+    deg, DO = 0.000" over an otherwise correct figure with nothing in the
+    output saying the labels were unset. `chbridge session` is the only place
+    those numbers exist, so it writes them beside the .pse and they are read
+    back here.
+    """
+
+    def _session(self, tmp_path, **geom):
+        pse = tmp_path / "s.pse"
+        pse.write_bytes(b"not really a session")
+        if geom:
+            (tmp_path / "s_geometry.json").write_text(json.dumps(geom),
+                                                      encoding="utf-8")
+        return pse
+
+    def test_the_sidecar_is_read(self, tmp_path, capsys):
+        pse = self._session(tmp_path, d_ic=6.0, o_ic=165.0, do=0.9371)
+        assert main(["render", str(pse), "--variant", "pair",
+                     "--dry-run"]) == 0
+        out = capsys.readouterr().out
+        assert "D_IC 6.0 A" in out and "O_IC 165.0 deg" in out
+        assert "DO 0.9371" in out
+
+    def test_an_explicit_flag_wins(self, tmp_path, capsys):
+        pse = self._session(tmp_path, d_ic=6.0, o_ic=165.0, do=0.9371)
+        assert main(["render", str(pse), "--variant", "pair", "--dic", "12",
+                     "--dry-run"]) == 0
+        out = capsys.readouterr().out
+        assert "D_IC 12.0 A" in out
+        assert "O_IC 165.0 deg" in out        # the others still come from it
+
+    def test_no_numbers_anywhere_warns_rather_than_labelling_zero(
+            self, tmp_path, capsys):
+        pse = self._session(tmp_path)
+        assert main(["render", str(pse), "--variant", "pair",
+                     "--dry-run"]) == 0
+        err = capsys.readouterr().err
+        assert "reads as a measurement" in err
+
+    def test_a_corrupt_sidecar_is_reported_not_swallowed(self, tmp_path, capsys):
+        pse = self._session(tmp_path)
+        (tmp_path / "s_geometry.json").write_text("{not json", encoding="utf-8")
+        assert main(["render", str(pse), "--variant", "pair",
+                     "--dry-run"]) == 0
+        assert "ignoring" in capsys.readouterr().err
+
+
+class TestRenderHelpersAreNotCachedOnExistence:
+    """A corrected session must not render with the old session's helpers.
+
+    The flat helper renders -- mask, mouth markers, footprint, transparent
+    base -- live in `intermediate/` and were reused whenever the file existed.
+    Measured: a session rebuilt with its tunnels correctly carried onto the
+    pose produced a figure with corrected D_IC/O_IC/DO labels over exit
+    markers at byte-identical pixel coordinates from the old, wrong frame --
+    a picture that disagrees with its own caption, and nothing said so.
+    """
+
+    def test_a_newer_session_reruns_the_helpers(self, tmp_path):
+        from channelbridge.cli import _older_than
+
+        inter = tmp_path / "intermediate"
+        inter.mkdir()
+        helper = inter / "p_geom001_mask.png"
+        helper.write_bytes(b"old")
+        pse = tmp_path / "s.pse"
+        pse.write_bytes(b"session")
+        os.utime(helper, (1, 1))
+        os.utime(pse, (100, 100))
+        assert _older_than(str(helper), str(pse)) is True
+
+    def test_an_up_to_date_helper_is_kept(self, tmp_path):
+        from channelbridge.cli import _older_than
+
+        helper = tmp_path / "h.png"
+        pse = tmp_path / "s.pse"
+        helper.write_bytes(b"x")
+        pse.write_bytes(b"y")
+        os.utime(pse, (1, 1))
+        os.utime(helper, (100, 100))
+        assert _older_than(str(helper), str(pse)) is False
+
+    def test_a_missing_helper_is_stale(self, tmp_path):
+        from channelbridge.cli import _older_than
+
+        assert _older_than(str(tmp_path / "nope.png")) is True

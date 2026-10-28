@@ -9,6 +9,7 @@ issues pointing at a missing feature.
 ```
 pure Python, pytest-testable          tunnel.py  geometry.py  patches.py
   (no PyMOL, no cluster, no I/O)      channelsdb.py  caver/  reference_pose.py
+                                      pose.py
                                       render/{frame,cut,svg,style,select}.py
           ▲
           │ called by
@@ -60,7 +61,10 @@ every `run_*.py`:
   line. A figure that quietly keeps a default you thought you changed is
   worse than one that refuses to build.
 * **`--prefix` on every stage**, at the front of every file it writes, so two
-  runs over one folder cannot collide.
+  runs over one folder cannot collide. Anything that *parses* such a name
+  must therefore find its field inside the name rather than anchor at the
+  start -- `figures.scan_output` anchored, and read a prefixed pose folder as
+  an empty search.
 * **`pair` / `assembly`, never `monomer` / `multimer`** — the "monomer" scene
   holds two chains. The old spellings survive as CLI aliases only.
 * PyMOL **scenes store object visibility and the camera, never global
@@ -101,14 +105,6 @@ general form is what transfers.
    slerp divides by `sin(φ)` and was guarded only near 0. At exactly 180° —
    which is the normal case for one of the two sessions — every arc point
    collapsed onto the vertex.
-
-## Reading the comments
-
-Several comments in `src/` and `tests/` refer to earlier campaigns by short
-codes (`p5a`–`p5d`, `p6a`). Those were the prototype projects these defaults
-were calibrated on. The references are not resolvable outside the group that
-wrote them, and they are kept rather than scrubbed because each records *why*
-a particular default is what it is — provenance is worth more than tidiness.
 
 ## Before opening a pull request
 

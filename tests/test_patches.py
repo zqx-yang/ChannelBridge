@@ -7,9 +7,13 @@ a renderer.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
+import numpy as np
 import pytest
 
 from channelbridge.patches import (
+    ANCHOR,
     PatchParams,
     Residue,
     classify,
@@ -17,6 +21,7 @@ from channelbridge.patches import (
     geometry_score,
     grow_avoid,
     patch_score,
+    pick_hotspots,
     write_patch_table,
 )
 
@@ -130,8 +135,8 @@ class TestGeometryScore:
 
 
 class TestPatchScore:
-    def test_it_reproduces_the_published_p6a_row(self):
-        # GDH rank 1 of the p6a run: the table records score 4.54 beside the
+    def test_it_reproduces_the_published_run1_row(self):
+        # GDH rank 1 of the worked example: the table records score 4.54 beside the
         # feature values below. This is the regression that matters -- if it
         # ever drifts, patch tables from before and after stop comparing.
         assert patch_score(anchors=3, ss_frac=1.00, phob_frac=0.50, geom=1.00,
@@ -218,7 +223,7 @@ class TestEveryMouthCastsAShadow:
     An enzyme may open more than once, and a binder capping a secondary
     mouth blocks the channel as surely as one capping the primary. The
     residue table reports the primary's geometry, which is why this is
-    invisible in the table: p6a's GDH residues 100 and 103 sit 22 A off the
+    invisible in the table: the worked example's GDH residues 100 and 103 sit 22 A off the
     primary axis -- far outside its 13 A cylinder -- and are SHADOW on the
     strength of a second mouth.
     """
@@ -238,3 +243,170 @@ class TestEveryMouthCastsAShadow:
         r = res(3, perp=6.0, axial=0.0)
         assert classify(r, in_core=False, in_channel=False, in_avoid=False,
                         params=P) == "SHADOW"
+
+
+class TestPartnerFootprint:
+    """A binding partner that is not in the design, as a keep-off zone.
+
+    The geometry is checked on a constructed complex of known answer: the
+    "partner complex" is the target rotated and shifted together with a slab
+    of partner atoms, so superposing it back must land the slab exactly where
+    it was built and the covered residues are known by construction.
+    """
+
+    def _atoms(self, chain, coords, *, resname="ALA", start=1, hetatm=False,
+               name=" CA "):
+        from channelbridge.io.pdb import Atom
+
+        return [Atom(serial=i, name=name, altloc="", resname=resname,
+                     chain=chain, resseq=start + i, icode=" ",
+                     xyz=tuple(float(v) for v in c), occupancy=1.0,
+                     bfactor=0.0, element="C", hetatm=hetatm)
+                for i, c in enumerate(coords)]
+
+    def _case(self, gap=3.0):
+        from channelbridge.io.pdb import AtomArray
+        from channelbridge.reference_pose import rotation_about
+
+        # target: 10 residues in a line along x, 4 A apart
+        target_xyz = np.array([[4.0 * i, 0.0, 0.0] for i in range(10)])
+        target = AtomArray(self._atoms("N", target_xyz, start=0))
+        # partner: a slab sitting `gap` A above residues 3, 4 and 5
+        partner_xyz = np.array([[4.0 * i, gap, 0.0] for i in (3, 4, 5)])
+        # the partner complex holds both, rigidly moved
+        rot = rotation_about([0.2, 1.0, 0.3], 61.0)
+        shift = np.array([11.0, -4.0, 6.0])
+        both = AtomArray(
+            self._atoms("A", target_xyz @ rot.T + shift, start=0)
+            + self._atoms("B", partner_xyz @ rot.T + shift, start=100))
+        return target, both
+
+    def test_it_finds_the_residues_the_partner_covers(self):
+        from channelbridge.patches import partner_footprint
+
+        target, both = self._case(gap=3.0)
+        fp = partner_footprint(target, "N", both, "A", "B", contact=5.0)
+        assert fp.rmsd == pytest.approx(0.0, abs=1e-6)
+        assert fp.n_matched == 10
+        # residues 3, 4, 5 are 3 A away; 2 and 6 are sqrt(16+9) = 5 A away
+        assert set(fp.residues) >= {"3", "4", "5"}
+        assert "8" not in fp.residues
+        assert fp.selection.startswith("resi ")
+
+    def test_contact_distance_decides_how_wide_the_footprint_is(self):
+        from channelbridge.patches import partner_footprint
+
+        target, both = self._case(gap=3.0)
+        tight = partner_footprint(target, "N", both, "A", "B", contact=3.5)
+        wide = partner_footprint(target, "N", both, "A", "B", contact=9.0)
+        assert set(tight.residues) < set(wide.residues)
+
+    def test_an_empty_footprint_warns_rather_than_passing_silently(self):
+        from channelbridge.patches import partner_footprint
+
+        target, both = self._case(gap=40.0)
+        fp = partner_footprint(target, "N", both, "A", "B", contact=5.0)
+        assert fp.residues == ()
+        assert fp.selection == ""
+        assert any("footprint is empty" in w for w in fp.warnings())
+
+    def test_a_bad_superposition_warns(self):
+        from channelbridge.io.pdb import AtomArray
+        from channelbridge.patches import partner_footprint
+
+        target, both = self._case()
+        # stretched far enough that no rigid transform can fit it; a mild
+        # distortion sits under the threshold on purpose, since the warning
+        # is for a mispaired chain, not for ordinary homolog divergence
+        scrambled = AtomArray([
+            a if a.chain != "A" else type(a)(**{
+                **a.__dict__, "xyz": (a.xyz[0] * 3.0, a.xyz[1], a.xyz[2])})
+            for a in both])
+        fp = partner_footprint(target, "N", scrambled, "A", "B", contact=5.0)
+        assert fp.rmsd > 3.0
+        assert any("RMSD" in w for w in fp.warnings())
+
+    def test_no_shared_numbering_is_an_error_not_an_empty_answer(self):
+        from channelbridge.io.pdb import AtomArray
+        from channelbridge.patches import partner_footprint
+
+        target, both = self._case()
+        shifted = AtomArray([
+            a if a.chain != "A" else type(a)(**{**a.__dict__,
+                                               "resseq": a.resseq + 5000})
+            for a in both])
+        with pytest.raises(ValueError, match="too few to superpose"):
+            partner_footprint(target, "N", shifted, "A", "B")
+
+    def test_a_missing_partner_chain_says_which_chains_exist(self):
+        from channelbridge.patches import partner_footprint
+
+        target, both = self._case()
+        with pytest.raises(ValueError, match="no polymer atoms in chain Z"):
+            partner_footprint(target, "N", both, "A", "Z")
+
+
+class TestPickHotspots:
+    """Which residues of a patch a generator should be told about.
+
+    Not all of them. A patch is 7-14 residues and a hotspot is a residue the
+    binder locks onto; handing the whole epitope over also forced a
+    per-residue tip-atom table to describe the glycines, alanines and
+    prolines in it -- the three residue types RFdiffusion3's `TIP` keyword
+    is not defined for. The worked example's rule, `--n-hotspots 5`.
+    """
+
+    #: the real GPPS patch 2 of examples/iMARS, with its measured exposure
+    PATCH: ClassVar[list] = "87 89 355 356 359 361 363 367 370 374".split()
+    INFO: ClassVar[dict] = {
+        "87": ("PHE", 60.0), "89": ("PHE", 55.0), "355": ("LYS", 70.0),
+        "356": ("GLY", 40.0), "359": ("SER", 50.0), "361": ("PHE", 65.0),
+        "363": ("PRO", 45.0), "367": ("ALA", 30.0), "370": ("LEU", 58.0),
+        "374": ("ASP", 52.0),
+    }
+
+    def test_only_anchors_come_back(self):
+        got = pick_hotspots(self.PATCH, self.INFO)
+        assert [r for r, _n in got] == ["87", "89", "361", "370"]
+        assert all(n in ANCHOR for _r, n in got)
+
+    def test_no_glycine_alanine_or_proline_can_be_returned(self):
+        """The three RFdiffusion3 has no TIP for."""
+        got = pick_hotspots(self.PATCH, self.INFO)
+        assert not {n for _r, n in got} & {"GLY", "ALA", "PRO"}
+
+    def test_fewer_anchors_than_asked_for_is_not_padded(self):
+        """Padding with residues a binder cannot grip would read as five
+        anchors to everything downstream."""
+        got = pick_hotspots(self.PATCH, self.INFO, n=5)
+        assert len(got) == 4
+
+    def test_a_buried_anchor_is_refused(self):
+        info = {"1": ("PHE", 5.0), "2": ("LEU", 80.0)}
+        assert pick_hotspots(["1", "2"], info) == [("2", "LEU")]
+
+    def test_they_are_spread_along_the_patch_not_clustered(self):
+        """Six anchors in two clusters: a score-only rule takes the best
+        three of the exposed cluster; this takes from both."""
+        members = ["10", "11", "12", "80", "81", "82"]
+        info = {"10": ("LEU", 40.0), "11": ("PHE", 42.0), "12": ("ILE", 41.0),
+                "80": ("TRP", 100.0), "81": ("TYR", 99.0), "82": ("MET", 98.0)}
+        got = [int(r) for r, _n in pick_hotspots(members, info, n=2)]
+        assert min(got) < 50 < max(got)
+
+    def test_the_result_is_in_sequence_order(self):
+        got = [int(r) for r, _n in pick_hotspots(self.PATCH, self.INFO)]
+        assert got == sorted(got)
+
+    def test_an_empty_patch_is_empty_not_an_error(self):
+        assert pick_hotspots([], {}) == []
+
+    def test_a_patch_with_no_anchor_returns_nothing(self):
+        """So the caller can say so, rather than inventing a hotspot."""
+        info = {"1": ("GLY", 50.0), "2": ("SER", 60.0), "3": ("LYS", 70.0)}
+        assert pick_hotspots(["1", "2", "3"], info) == []
+
+    def test_anchors_only_can_be_turned_off(self):
+        got = pick_hotspots(self.PATCH, self.INFO, anchors_only=False)
+        assert len(got) == 5
+        assert {n for _r, n in got} & {"LYS", "PRO"}

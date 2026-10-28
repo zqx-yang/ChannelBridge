@@ -22,7 +22,7 @@ FLAT = ("mask", "mouth", "footprint")
 # does for the flat helpers. The cross-section needs this because a cut
 # surface is nothing but creases and the outline mode draws a black edge
 # along every one of them, burying the thing the section exists to show.
-# p5d renders its own cross_section at ray_trace_mode 0 for the same reason.
+# the earlier script renders its own cross_section at ray_trace_mode 0 for the same reason.
 NO_OUTLINE = ("classes", "occupancy", "map", "envelopes")
 
 #: Scenes whose labels must be drawn in front of the surfaces. A label sits at

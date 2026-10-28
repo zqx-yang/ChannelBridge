@@ -7,7 +7,7 @@ Run under PyMOL, which is where ``cmd`` exists::
         complex=geom001_..._complex.pdb \
         tunnel_up=.../tun_cl_001.pdb tunnel_dn=.../tun_cl_002.pdb \
         up_chains=B,C,D,E dn_chains=N \
-        out=.../p6a_geom001_rotated0.pse
+        out=.../run1_geom001_rotated0.pse
 
     # no inputs, no network: builds a synthetic pair and checks the scenes
     ... -m channelbridge.render.scenes -- --selftest
@@ -40,6 +40,7 @@ wrote.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -155,7 +156,7 @@ class SceneSpec:
         # an 800x600 preview; the tunnel-bearing protomer plus the partner is
         # the same figure for a fraction of that.
         self.focus_chains = [c for c in focus_chains if c]
-        # "complex" frames both enzymes whole, the p5c look and the default;
+        # "complex" frames both enzymes whole, the the earlier look and the default;
         # "channel" crops tight to the two mouths. With focus_chains trimming
         # the assembly to the tunnel-bearing protomer plus its partner, the
         # whole-complex view is no longer dominated by symmetry copies.
@@ -416,7 +417,7 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
     #             wrapped at `ligand_wrap`. A CAVER chain starts at the
     #             starting point and runs outward, so on its own it leaves the
     #             cofactor sitting outside the red volume -- but the ligand is
-    #             IN the channel, and p5c draws the union for exactly this
+    #             IN the channel, and the earlier script draws the union for exactly this
     #             reason. Visual only: it must never move an exit.
     tun = {}
     drawn = {}
@@ -441,10 +442,17 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
         wrap_sel = spec.channel_ligand_sel(key)
         if wrap_sel and spec.ligand_wrap > 0:
             try:
-                lig = np.asarray(cmd.get_coords("cplx and (%s)" % wrap_sel), float)
+                raw = cmd.get_coords("cplx and (%s)" % wrap_sel)
             except Exception:
-                lig = None
-            if lig is not None and len(lig):
+                raw = None
+            # `get_coords` returns None for a selection that matches nothing,
+            # and `np.asarray(None, float)` is a 0-d array -- not None, and
+            # `len()` of it raises `TypeError: len() of unsized object`. So the
+            # emptiness is tested BEFORE the conversion, and the shape after:
+            # the "no atoms matched" branch below exists precisely for this
+            # case and was unreachable.
+            lig = np.asarray(raw, float) if raw is not None else None
+            if lig is not None and lig.ndim == 2 and len(lig):
                 d_xyz = np.vstack([xyz, lig])
                 d_rad = np.concatenate([rad, np.full(len(lig), spec.ligand_wrap)])
                 report["objects"].append(
@@ -482,7 +490,7 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
         # acceptor's exit, and says nothing about which way the acceptor
         # opens. A receiving mouth pointing 90 degrees sideways, or straight
         # back into its own protein, scores exactly like one facing the
-        # donor. On the p6a GDH-FNR pose: O_IC 165 deg, this 90 deg.
+        # donor. On the worked GDH-FNR pose: O_IC 165 deg, this 90 deg.
         # Reported, never scored -- DO's published coefficients cover D_IC
         # and O_IC only, and adding a term here would not be iMARS.
         w1, w3 = q1 - p3, p2 - p3
@@ -570,13 +578,19 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
 
     # ---- the four named scenes plus the flat helpers
     tunnels = [n for n in ("tunnel_up", "tunnel_dn") if n in cmd.get_names("objects")]
-    classes_objs = _classes(cmd, spec, st, report) if spec.classes else []
+    # Built whenever the patch tables are given, not only for the inspection
+    # scene: the patch THIS pose bridges belongs in the figure of this pose,
+    # in red (user, 2026-10-27). It is the one thing the render is pointing
+    # at besides the channel, and it was only ever visible in `classes`.
+    patch_objs = _classes(cmd, spec, st, report) \
+        if (spec.hotspots_up or spec.hotspots_dn) else []
+    classes_objs = patch_objs if spec.classes else []
     occ_objs = _occupancy(cmd, spec, st, report)
 
     sets = {
         **({"classes": ["cplx", *classes_objs]} if spec.classes else {}),
         "occupancy": (occ_objs or ["cplx"]),
-        "base": ["cplx_il"],
+        "base": ["cplx_il", *patch_objs],
         "mask": [n for n in helpers if n.startswith("mask_")],
         "mouth": [n for n in helpers if n.startswith("mouth_")],
         "footprint": [n for n in helpers if n.startswith("footprint")],
@@ -615,14 +629,17 @@ def build_session(spec: SceneSpec, out_path: str, frame: Optional[Frame] = None)
                 cmd.clip("slab", 3000)
                 assembly_view = cmd.get_view()
             if base_name == "render":
-                sets[key] = [src + "_il", *tunnels, *ann]
+                sets[key] = [src + "_il", *tunnels, *patch_objs, *ann]
                 # The same frame WITHOUT the 3D channel and annotation. This
                 # is what an SVG is assembled on: the SVG draws the channel as
                 # a traced vector outline and the numbers as editable text, so
                 # a raster that already carries both comes out with every
                 # label twice and a red smear where the 3D tunnel reaches into
                 # solvent.
-                sets["base_" + v] = [src + "_il"]
+                # The patch surfaces stay: they are part of the picture,
+                # not part of the 2D overlay, so the SVG has to be built on a
+                # raster that already carries them.
+                sets["base_" + v] = [src + "_il", *patch_objs]
 
 
     for name in list(sets):
@@ -755,7 +772,7 @@ def _classes(cmd, spec, st, report):
             continue
         cmd.hide("everything", name)
         cmd.show("surface", name)
-        cmd.set_color("c_hot", [float(c) for c in st.palette.rgb("annotation")])
+        cmd.set_color("c_hot", [float(c) for c in st.palette.rgb("patch")])
         cmd.color("c_hot", name)
         # the patch itself stays solid against the translucent surface around
         # it: it is the one thing this scene is pointing at
@@ -964,6 +981,11 @@ def _parse_argv(argv) -> Dict[str, str]:
     return out
 
 
+def _sidecar_path(pse_path):
+    """Where a session keeps the numbers the SVG step has to label."""
+    return os.path.splitext(pse_path)[0] + "_geometry.json"
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     args = _parse_argv(argv)
@@ -1013,6 +1035,22 @@ def main(argv=None):
         g = rep["geometry"]
         print("[pse] %-26s D_IC %.1f A, O_IC %.1f deg, DO %.4f"
               % ("geometry", g["d_ic"], g["o_ic"], g["do"]))
+        # Persisted, not only printed. The SVG step labels D_IC, O_IC and DO
+        # and defaults them to 0.0 when it is not told them, so a render
+        # driven from the session alone published "D_IC = 0.0 A, DO = 0.000"
+        # over a perfectly good picture. The session is the only place those
+        # numbers exist, so it writes them down; `chbridge render` reads this
+        # file when the flags are absent, and says so when it cannot.
+        side = _sidecar_path(args["out"])
+        try:
+            with open(side, "w", encoding="utf-8") as fh:
+                json.dump({"d_ic": g["d_ic"], "o_ic": g["o_ic"], "do": g["do"],
+                           "axis_px": rep.get("axis_px"),
+                           "frame": rep.get("frame", "")}, fh, indent=2,
+                          sort_keys=True)
+            print("[pse] %-26s %s" % ("geometry written to", side))
+        except OSError as exc:
+            print("[pse] could not write %s: %s" % (side, exc), file=sys.stderr)
     for s in rep.get("superposed", []):
         print("      align   %s" % s)
     for w in rep.get("warnings", []):
@@ -1079,7 +1117,7 @@ def selftest():
         check(any(o.startswith("tunnel_dn (") and "9 from CAVER" in o
                   for o in rep["objects"]), "downstream tunnel kept as an object")
         check(any("wraps" in o and "ligand atom" in o for o in rep["objects"]),
-              "the drawn channel wraps the channelled ligand (p5c rule)")
+              "the drawn channel wraps the channelled ligand (earlier rule)")
         g = rep.get("geometry", {})
         # P2 = (-5, 0, 0), P3 = (5, 6, 0): D_IC = |(10, 6, 0)| = 11.66,
         # O_IC = angle between (-1, 0, 0) and (10, 6, 0) = 149.0 deg

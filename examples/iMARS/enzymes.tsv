@@ -7,13 +7,33 @@
 #			the paper's enzymes are plant and yeast proteins and almost none has
 #			its own crystal structure. Found by RCSB sequence search on the
 #			parent sequence, then filtered by whether ChannelsDB has it.
-#	score		RCSB sequence-search score against the iMARS parent sequence,
-#			1.0000 = top hit. Below ~0.6 the entry is a DISTANT homolog and its
-#			tunnel is evidence about the family, not about this enzyme.
+#	score		RCSB sequence-search score: this hit's alignment BITSCORE divided
+#			by the best hit's bitscore in the same search. 1.0000 means only
+#			"nothing in the PDB aligns better" -- it is NOT sequence identity,
+#			and must not be read as one.
+#
+#			It approximates identity only when the top hit IS the query
+#			protein, because the denominator is then the self-score. Where the
+#			enzyme has no structure of its own the scale breaks: searching with
+#			MYS's own sequence returns 5UV1 at score 1.0000 and identity 0.542.
+#			Six enzymes here score 1.0000 against an entry that does not
+#			contain them. See structures.tsv for what each entry really holds,
+#			and `find_structures.py` for the check.
 #	rank		where that entry sat in the search. ChannelsDB coverage is per
 #			ENTRY, not per protein: only 4 of the 24 rank-1 hits are annotated,
 #			and going down the ranks found 22. The rank is kept because a rank-12
 #			hit is a weaker claim than a rank-1 hit even at the same score.
+#
+#			THIS COLUMN IS WHERE THE SET WENT WRONG, and the search was not at
+#			fault. Walking down the ranks to find an annotated entry traded
+#			protein identity for tunnel annotation, and the trade went further
+#			than anyone checked: LIC's own structure (2ONG) is rank 1 at 100 %
+#			identity and was passed over for rank 4, which is a bornyl
+#			diphosphate synthase; 4CL's own (3TSY) is rank 1 at 100 % identity
+#			and was passed over for rank 2. A predicted model of the right
+#			protein has no annotation either, so on that route the trade
+#			disappears and the annotation is carried over by superposition
+#			instead.
 #	product		what this enzyme HANDS ON, when it is the upstream half of a pair:
 #			the channelled intermediate. Blank for an enzyme that only ever
 #			appears downstream in this set, because then nothing here consumes

@@ -1,6 +1,6 @@
 # ChannelBridge pair file -- GDH (upstream) to FNR (downstream), channelling NADPH.
 #
-# The worked example. It is the this project system: glucose dehydrogenase
+# The worked example: glucose dehydrogenase
 # Q252L/E170K homotetramer (PDB 1RWB assembly 1, glucose from 3AY6, NADP built
 # from NAD) hands NADPH to spinach ferredoxin-NADP+ reductase (PDB 1FNC).
 #
@@ -39,8 +39,8 @@ targets:
       clustering_threshold: 3.5
       approximating_balls: 12
       seed: 1
-      # Raise shell_radius until the exit stops moving. On the build used for
-      # the P5 record sr14 == sr16 to three decimals.
+      # Raise shell_radius until the exit stops moving. On the build
+      # measured in docs/caver-builds.md, sr14 == sr16 to three decimals.
       shell_radius: 14
       shell_radius_sweep: [5, 7, 9, 10, 12, 14, 16]
       cluster: 1                   # the cofactor route: 93-100% within 4 A of NAP
@@ -58,7 +58,15 @@ targets:
     avoid:
       - "resi 314"                 # the Tyr314 gate
     avoid_from:
-      - "input/1gaq.cif:A:B:5:8"   # the ferredoxin-binding face
+      # The ferredoxin-binding face, as FILE:ALIGN_CHAIN:PARTNER_CHAIN:contact:spread.
+      # 1GAQ is maize FNR (chains A and C) with ferredoxin (B); its chain A
+      # superposes on this spinach FNR at 0.76 A over 296 residues, and
+      # ferredoxin then covers 21 residues within 5 A -- Tyr314 among them,
+      # which is the independent check that the superposition is right.
+      # `contact` (5) is the partner's footprint; `spread` (8) is how far a
+      # hotspot CENTRE must stay from it, which is a binder's own radius and
+      # a different quantity. Other avoid selections keep --avoid-r.
+      - "input/1GAQ.pdb:A:B:5:8"
     caver:
       exclude: [HOH, WAT, A2P]
       start: [11.087, -1.644, 12.620]
@@ -69,7 +77,7 @@ targets:
       seed: 1
       shell_radius: 7
       shell_radius_sweep: [3.5, 5, 7]
-      cluster: 2                   # chosen empirically; see docs/caver-builds.md
+      cluster: 2                   # chosen empirically; see docs/imars-verification.md
 
 # How a CAVER sphere chain becomes geometry. These defaults are what makes the
 # numbers independent of which CAVER build produced them -- see
@@ -168,6 +176,6 @@ render:
     mouth: deepteal
     # The tunnel sits INSIDE a translucent surface, so it must be nearly
     # opaque or it vanishes; the envelope sits outside, in front of things
-    # worth seeing, so it is faint. Both are the the reference run map's values.
+    # worth seeing, so it is faint. Both are the package defaults.
     tunnel_transparency: 0.10
     binder_transparency: 0.70

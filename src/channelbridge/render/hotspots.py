@@ -60,7 +60,7 @@ CLASS_ORDER = (
 
 
 def _default_class_colors() -> Dict[str, str]:
-    # The p5d map script's palette, which the user's eye is already trained
+    # The the earlier map script's palette, which the user's eye is already trained
     # on, minus the two distinctions this session deliberately does not make:
     # upstream vs downstream, and hydrophobic vs other exposed surface.
     return {
@@ -112,7 +112,7 @@ class ClassPalette:
     mouth: str = "deepteal"
     #: The tunnel sits INSIDE a translucent surface, so it has to be nearly
     #: opaque or it disappears; the binder envelope sits outside and in front
-    #: of things worth seeing, so it is faint. Both are p5d's values.
+    #: of things worth seeing, so it is faint. Both are the earlier map's values.
     tunnel_transparency: float = 0.10
     binder_transparency: float = 0.70
 
@@ -198,7 +198,7 @@ class ClassPalette:
         """Pairs of drawn colours too close to tell apart on a shaded surface.
 
         Reported rather than corrected: the class colours are the ones the
-        user's eye is trained on from the p5d map, so a clash is something to
+        user's eye is trained on from the the earlier map, so a clash is something to
         be told about, not something to silently repaint.
         """
         cols = {c: self.final_class_rgb(c) for c in CLASS_ORDER if c in self.classes}
@@ -701,7 +701,7 @@ def build(spec: HotspotMapSpec, out_pse: str, report=print) -> Dict:
     # two classes.
     # ONE OBJECT PER CLASS, per enzyme.
     #
-    # The p5d original colours the classes in place on one surface and keeps
+    # The the earlier original colours the classes in place on one surface and keeps
     # 31 named SELECTIONS beside it (GDH_surface, GDH_avoid, GDH_patch_01 ...).
     # A selection can be picked but not hidden: hiding it does not hide the
     # parent's surface. With seven translucent classes on one object every

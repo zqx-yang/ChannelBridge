@@ -1,0 +1,149 @@
+#	Which coordinates each enzyme SHOULD be represented by, and what the
+#	homolog-based first version of this set actually used.
+#
+#	Produced by `./find_structures.py --tsv`, which queries UniProt, AlphaFold
+#	DB, AlphaFill and RCSB. Committed because it is a decision record; re-run
+#	the script to refresh it.
+#
+#	WHY THIS FILE EXISTS. The first version chose, for every enzyme without
+#	its own structure, the best hit of an RCSB sequence search, and recorded
+#	the search score. That score was then read as "how close is this to my
+#	enzyme". It is not: it ranks how well a hit matched the query, and six
+#	enzymes scored 1.0000 against an entry that does not contain them.
+#	Checking each entry against RCSB's own UniProt mapping shows that only
+#	TWO of the 24 entries in enzymes.tsv hold the enzyme they stand for:
+#
+#	  AS   3S9V -> Q38710  abietadiene synthase        correct
+#	  TS   3P5P -> Q41594  taxadiene synthase          correct
+#
+#	The other 22 are a different protein. Some are near relatives of the same
+#	reaction type and were never going to be more than family-level evidence.
+#	Others are a different enzyme altogether, and three of them matter most:
+#
+#	  STS  -> 3A5S, which is BAS's own structure (Rheum benzalacetone synthase)
+#	  BAS  -> 1BI5, chalcone synthase, while BAS's own 3A5Q/3A5R/3A5S existed
+#	  LIC  -> 1N1B, bornyl diphosphate synthase, while a limonene synthase
+#	          structure (5UV1) was given to MYS and OCS instead
+#	  RNMT -> 5KOK, pavine N-methyltransferase, not reticuline N-MT
+#	  REPI -> 1ZGD, chalcone reductase, not reticuline epimerase
+#	  SQS  -> 3WEF, HUMAN squalene synthase, where the paper's SQS is the
+#	          Priestia megaterium enzyme (ADF40697)
+#
+#	This is also where the duplicate pairs came from: MYS and OCS were not two
+#	paralogs legitimately sharing one structure, they were both assigned a
+#	third enzyme. Predicting from each enzyme's own sequence removes the whole
+#	class of error, which is why structure_source below prefers a model of the
+#	right protein over a crystal structure of the wrong one.
+#
+#	structure_source	what to use, in the order find_structures.py applies:
+#		pdb		the entry in `current_entry` holds this protein: keep it
+#		pdb-other	an experimental structure of THIS protein exists and
+#				the set used a different entry: switch to it
+#		alphafill	AlphaFold DB model with a cofactor transplanted, so a
+#				ligand-derived start point survives
+#		afdb		AlphaFold DB model, ligand-free: the start point has
+#				to come from catalytic residues (--start-cavity)
+#		af3		nothing predicted exists; predict it (MSA mode)
+#
+#	accession	iMARS Table S2G, "Accession number", split out of its paired
+#			"X and Y" cells.
+#	current_entry_holds	RCSB's UniProt mapping for `current_entry`.
+#
+#
+#	HOLDING THE RIGHT PROTEIN IS NOT ENOUGH -- two further checks, added
+#	2026-10-27, each of which changed an answer here:
+#
+#	  COVERAGE. An entry can hold this protein and not hold all of it.
+#	  4CL's only experimental structure, 3TSY, is a 4CL::stilbene-synthase
+#	  FUSION at 3.1 A in which 4CL's last 102 residues were never modelled
+#	  -- and 4CL is an ANL-superfamily enzyme whose C-terminal domain closes
+#	  over the active site. A tunnel computed there would run out through a
+#	  hole where a domain should be and would look like a wide channel.
+#	  An entry needs >=90% of its aligned reference span observed and no
+#	  unobserved run longer than 30. Coverage is taken over the ALIGNED
+#	  span, not the whole UniProt length: 2ONG covers limonene synthase
+#	  57-599 because the transit peptide is cleaved, which is correct.
+#
+#	  WHICH ENTRY, among several of the same protein. Coverage is a veto,
+#	  not a ranking. A bound cargo wins first (the start point comes from
+#	  where the channelled species sits), then wild type (an active-site
+#	  mutant is a different channel, which is why it was made), then
+#	  resolution. Taking the first cross-reference instead would give BAS
+#	  the apo 3A5Q over the holo wild-type 3A5R, and could give it 3A5S --
+#	  the I207L/L208F mutant, and the entry this set had already assigned
+#	  to STS by mistake.
+#
+#	AlphaFill now has to earn its place too: it outranks a plain model only
+#	because a ligand-derived start point survives, so its best-identity
+#	transplant must actually be usable (<=2.0 clashes per heavy atom, the
+#	same threshold pick_ligands.py applies). Only the best-identity tier
+#	counts -- accepting any usable transplant at any identity would be
+#	picking by clash count, the trap pick_ligands.py exists to avoid. Over
+#	the eleven candidates this changes exactly one answer: 4CL, whose ATP,
+#	AMP and CoA all come from the tobacco homolog at 2.6, 4.1 and 4.4
+#	clashes per atom.
+#
+#	OVERRIDE. 4CL is predicted with AlphaFold3 rather than taken from the
+#	AlphaFold DB model the generic order would pick, because its channel
+#	depends on an INTER-domain angle and that is the one thing this project
+#	measured AF2 to be unreliable at. 3TSY stays in the record as a partial
+#	cross-check: it cannot be the source, but it gives observed coordinates
+#	for ref 22-459 to align the prediction against. Overrides live in
+#	find_structures.py, never as an edit to this file -- this file is
+#	generated, so a hand-edit to it is lost on the next run, silently.
+#
+#
+#	IDENTITY IS NOT ONLY A UNIPROT QUESTION (added 2026-10-27). Four of these
+#	enzymes have accessions UniProt does not index, so its curated PDB
+#	cross-references could not answer and the code read "the authority cannot
+#	answer" as "no structure exists" -- and predicted them. Comparing the
+#	sequences directly, against the candidate entry each already had:
+#
+#	  CUS   3ALE  100.0 % over 369 residues   -> its OWN structure. Switched.
+#	  GGPPS 2E8T  100.0 % over 335 residues   -> its own structure too, but
+#	              only 89 % of the span is observed, so the coverage veto
+#	              sends it to prediction with its site mapped from 2E8T.
+#	  CHS   1BI5   91.8 % over 389 residues   -> a close orthologue from
+#	              another plant, NOT the same protein. Prediction stands.
+#	  SQS   3WEF   32.8 % over 235 residues   -> distant. Prediction stands.
+#
+#	The 95 % bar is set so that CHS's 91.8 % does not pass; it was not chosen
+#	to produce a wanted answer. GGPPS at 89 % coverage against a 90 % veto is
+#	a genuine borderline and the threshold was deliberately NOT moved to let
+#	it through: a discriminator was tried instead -- is the unobserved stretch
+#	a folded domain or a disordered tail, by its pLDDT -- and it was REFUTED,
+#	because GGPPS's missing 26 residues score 86.8 and 4CL's missing domain
+#	87.5. No rule separates them, so the veto stands as written.
+#	use_entry	the entry to actually PREPARE. For a switch this is not
+#			current_entry, and fetching current_entry instead would fetch
+#			the wrong protein -- the error this file exists to correct.
+#			Empty for a model or a prediction. It is a column and not a
+#			phrase inside `reason` so that a later stage can read it
+#			without parsing English.
+#	reason	why this source won, including what it was preferred over.
+#
+enzyme	accession	uniprot	organism	length	afdb_plddt	alphafill_ligands	structure_source	current_entry	current_entry_holds	use_entry	reason
+4'OMT	Q9LEL5.1	Q9LEL5	Coptis japonica (Japanese goldthread)	350	94.1	SAH,DTV,CIY,FER	alphafill	5ICE	Q5C9L7 (RS)-norcoclaurine 6-O-methyltransferase		model with SAH transplanted from 5ICC (54% identity, 1.48 A RMSD, 12 clashes = 0.5 per atom); NOTE 5ICE actually contains Q5C9L7 ((RS)-norcoclaurine 6-O-methyltransferase, Thalictrum flavum subsp. glaucum)
+4CL	AY376729	Q42524	Arabidopsis thaliana (Mouse-ear cress)	561	89.8	ATP,AMP,COA,SLU	af3	5BSM	O24146 4-coumarate--CoA ligase 2		OVERRIDE: the generic order would take the AlphaFold DB model (pLDDT 89.8) because one exists. 4CL is a two-domain ANL-superfamily adenylate-forming enzyme whose C-terminal domain closes over the active site, so the channel depends entirely on the INTER-domain angle -- which is the one thing this project measured AF2 to be unreliable at (15 AF2 models of one fusion spanned 0.36 DO on an inter-domain PAE of 28 A against a 31 A ceiling, while intra-domain PAE was 3.0-5.7 A). The AlphaFold DB model is AF2-era; AF3 with an MSA is predicted fresh and its PAE can be read for that domain pair specifically. 3TSY stays in the record as a partial experimental cross-check: it is a 4CL::stilbene synthase fusion missing 4CL's last 102 residues, so it cannot be the source, but it does give observed coordinates for ref 22-459 to align the prediction against (user's call, 2026-10-27); NOTE 5BSM actually contains O24146 (4-coumarate--CoA ligase 2, Nicotiana tabacum)
+7OMT	FJ156103.1	C7SDN9	Papaver somniferum (Opium poppy)	357	93.1	SAH,N7I,FER,SAM	alphafill	8J3G	A0A835HXA6 Uncharacterized protein		model with SAH transplanted from 5ICC (55% identity, 2.60 A RMSD, 7 clashes = 0.3 per atom); NOTE 8J3G actually contains A0A835HXA6 (Uncharacterized protein, Coptis chinensis)
+ADS	AY006482	Q9AR04	Artemisia annua (Sweet wormwood)	546	94.2	DPO,3FX,3CX,FPP	alphafill	3G4D	Q39761 (+)-delta-cadinene synthase isozyme XC1		model with DPO transplanted from 4RNQ (38% identity, 2.08 A RMSD, 5 clashes = 0.6 per atom); NOTE 3G4D actually contains Q39761 ((+)-delta-cadinene synthase isozyme XC1, Gossypium arboreum)
+AS	Q38710.1	Q38710	Abies grandis (Grand fir) (Pinus grandis)	868	87.8	AHD,210,GST,GRG	pdb	3S9V	Q38710 Bifunctional abietadiene synthase, chloroplastic	3S9V	3S9V contains this protein (UniProt Q38710 cross-references it); 3S9V covers ref 85-868, 96% observed
+BAS	Q94FV7.1	Q94FV7	Rheum palmatum (Chinese rhubarb)	384	95.8	HC4,NAR,STL,B3P	pdb-other	1BI5	P30074 Chalcone synthase 2	3A5R	UniProt Q94FV7 cross-references 3A5Q+3A5R+3A5S, but this set uses 1BI5, which it does not; SWITCH TO 3A5R -- 3A5R covers ref 1-384, 98% observed: bound HC4, wild type, 1.60 A (preferred over 3A5Q (apo, 1.80 A), 3A5S (apo, I207L, L208F, 1.80 A)); NOTE 1BI5 actually contains P30074 (Chalcone synthase 2, Medicago sativa)
+BBS	AIG92846.1	A0A075W0Z3	Matricaria chamomilla var. recutita (German chamomile) (Chamomilla recutita)	572	91.1	DPO,FPP,FAR,BFQ	alphafill	3G4D	Q39761 (+)-delta-cadinene synthase isozyme XC1		model with DPO transplanted from 4RNQ (42% identity, 1.94 A RMSD, 10 clashes = 1.1 per atom); NOTE 3G4D actually contains Q39761 ((+)-delta-cadinene synthase isozyme XC1, Gossypium arboreum)
+CHS	AY237728.1						af3	1BI5	P30074 Chalcone synthase 2		no UniProt entry found for AY237728.1; 1BI5 is 91.8% identical over 389 residue(s), below the 95% needed to call it the same protein
+CTS	A8CDR5.1	A8CDR5	Coptis japonica (Japanese goldthread)	486	92.8	PIM,HEM,VD3,BHF	alphafill	5YLW	S4UX02 Ferruginol synthase		model with PIM transplanted from 5YM3 (36% identity, 2.45 A RMSD, 22 clashes = 2.0 per atom); NOTE 5YLW actually contains S4UX02 (Ferruginol synthase, Salvia miltiorrhiza)
+CUS	AKG06601.1						pdb	3ALE	Q8LIL0 Bisdemethoxycurcumin synthase	3ALE	3ALE is 100.0% identical to this enzyme over 402 aligned residues, so it holds this protein (UniProt indexes no entry for the published accession, so its curated cross-references could not answer); 3ALE covers ref 1-402, 92% observed
+ERG20	NP_012368.1	P08524	Saccharomyces cerevisiae (strain ATCC 204508 / S288c) (Baker's yeast)	352	95.6	POP,IPR,IPE,210	alphafill	1FPS	P08836 Farnesyl pyrophosphate synthase		model with POP transplanted from 4H5D (45% identity, 2.13 A RMSD, 2 clashes = 0.2 per atom); NOTE 1FPS actually contains P08836 (Farnesyl pyrophosphate synthase, Gallus gallus)
+GES	Q6USK1.1	Q6USK1	Ocimum basilicum (Sweet basil)	567	85.6	DST,DPO,3FX,3CX	alphafill	3N0F	Q9AR86 Isoprene synthase, chloroplastic		model with DST transplanted from 3N0G (36% identity, 2.81 A RMSD, 10 clashes = 0.7 per atom); NOTE 3N0F actually contains Q9AR86 (Isoprene synthase, chloroplastic, Populus canescens)
+GGPPS	GMC29149.1						af3	2E8T	Q12051 Geranylgeranyl pyrophosphate synthase BTS1		2E8T is 100.0% identical to this enzyme over 335 aligned residues, so it holds this protein (UniProt indexes no entry for the published accession, so its curated cross-references could not answer) -- but 2E8T holds this protein but only 89% of its ref 1-335 span has coordinates (38 residue(s) unobserved, longest run 26: 34-38, 188-189, 219-223, 310-335). Predict it
+GPPS	AAN01134.1	Q8LKJ2	Abies grandis (Grand fir) (Pinus grandis)	381	80.4		afdb	3KRF	Q9SBR3 Geranyl diphosphate synthase large subunit		model AF-Q8LKJ2-F1 v6, pLDDT 80.4 -- ligand-free, so the start point must come from catalytic residues; NOTE 3KRF actually contains Q9SBR3 (Geranyl diphosphate synthase large subunit, Mentha piperita)
+LIC	L13459	Q40322	Mentha spicata (Spearmint)	599	89.8	CO3,DST,SNE,BFQ	pdb-other	1N1B	O81192 (+)-bornyl diphosphate synthase, chloroplastic	2ONG	UniProt Q40322 cross-references 2ONG+2ONH, but this set uses 1N1B, which it does not; SWITCH TO 2ONG -- 2ONG covers ref 57-599, 100% observed: bound F3P, E57M, 2.70 A (preferred over 2ONH (bound F3P, E57M, 2.70 A)); NOTE 1N1B actually contains O81192 ((+)-bornyl diphosphate synthase, chloroplastic, Salvia officinalis)
+MYS	CAC41012	Q93X23	Quercus ilex (Holly oak)	597	89.5	POP,DST,BFQ,CO3	alphafill	5UV1	A0A1C9J6A7 (R)-limonene synthase 1, chloroplastic		model with POP transplanted from 1N1Z (47% identity, 1.60 A RMSD, 9 clashes = 1.0 per atom); NOTE 5UV1 actually contains A0A1C9J6A7 ((R)-limonene synthase 1, chloroplastic, Citrus sinensis)
+NES	APB87285.1	A0A1J0CL47	Fragaria ananassa (Strawberry) (Fragaria chiloensis x Fragaria virginiana)	519	89.8		afdb	3N0F	Q9AR86 Isoprene synthase, chloroplastic		model AF-A0A1J0CL47-F1 v6, pLDDT 89.8 -- ligand-free, so the start point must come from catalytic residues; NOTE 3N0F actually contains Q9AR86 (Isoprene synthase, chloroplastic, Populus canescens)
+OCS	A4FVP2.1	A4FVP2	Arabidopsis thaliana (Mouse-ear cress)	565	91.2	DST,POP,CO3,SNE	alphafill	5UV1	A0A1C9J6A7 (R)-limonene synthase 1, chloroplastic		model with DST transplanted from 3N0G (40% identity, 4.90 A RMSD, 12 clashes = 0.9 per atom); NOTE 5UV1 actually contains A0A1C9J6A7 ((R)-limonene synthase 1, chloroplastic, Citrus sinensis)
+RAS	AJA31666.1	A0A0A7RA06	Salvia miltiorrhiza (Chinese sage)	427	94.1		afdb	5FAL	R9RYW2 Hydroxycinnamoyl-CoA shikimate/quinate hydroxycinnamoyltransferase 2		model AF-A0A0A7RA06-F1 v6, pLDDT 94.1 -- ligand-free, so the start point must come from catalytic residues; NOTE 5FAL actually contains R9RYW2 (Hydroxycinnamoyl-CoA shikimate/quinate hydroxycinnamoyltransferase 2, Panicum virgatum)
+REPI	AKO60175.1	A0A0H4IM19	Papaver somniferum (Opium poppy)	900	82.6		afdb	1ZGD	Q40309 Chalcone reductase		model AF-A0A0H4IM19-F1 v6, pLDDT 82.6 -- ligand-free, so the start point must come from catalytic residues; NOTE 1ZGD actually contains Q40309 (Chalcone reductase, Medicago sativa)
+RNMT	AOR51552.1	A0A1C9U5X5	Papaver somniferum (Opium poppy)	363	92.8	SAM,SAH,CO3,LOP	alphafill	5KOK	C3SBW0 Pavine N-methyltransferase		model with SAM transplanted from 5KOC (56% identity, 1.26 A RMSD, 14 clashes = 0.5 per atom); NOTE 5KOK actually contains C3SBW0 (Pavine N-methyltransferase, Thalictrum flavum subsp. glaucum)
+SQS	ADF40697.1						af3	3WEF	P37268 Squalene synthase		no UniProt entry found for ADF40697.1; 3WEF is 32.8% identical over 235 residue(s), below the 95% needed to call it the same protein
+STS	ACC76753	B2MWQ8	Polygonum cuspidatum (Japanese knotweed)	388	95.1		afdb	3A5S	Q94FV7 Polyketide synthase BAS		model AF-B2MWQ8-F1 v6, pLDDT 95.1 -- ligand-free, so the start point must come from catalytic residues; NOTE 3A5S actually contains Q94FV7 (Polyketide synthase BAS, Rheum palmatum)
+TS	AAC49310	Q41594	Taxus brevifolia (Pacific yew)	862	88.6	GST,210,AHD,GRG	pdb	3P5P	Q41594 Taxadiene synthase	3P5P	3P5P contains this protein (UniProt Q41594 cross-references it); 3P5P covers ref 108-862, 99% observed

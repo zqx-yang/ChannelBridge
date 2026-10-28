@@ -111,7 +111,7 @@ class TestMatching:
     Closest approach cannot do this. Every CAVER cluster of one run starts
     from the same starting point, so they all share their first spheres and
     the minimum distance between any of them and a database tunnel passing
-    that region is the same number. Measured on p6z: clusters 1, 2 and 3 all
+    that region is the same number. Measured on the reproduction set: clusters 1, 2 and 3 all
     reported 0.6 A to the same tunnel. What separates clusters is the EXIT.
     """
 

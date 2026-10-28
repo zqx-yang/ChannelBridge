@@ -1,0 +1,25 @@
+enzyme	source	file	chains	cargo	keep_also	trim	start_mode	start_residues	note
+4'OMT	alphafill	_entries/alphafill_Q9LEL5.cif	A	SAM			ligand		single-chain file; S-adenosylmethionine, the methyl donor of this 4'-O-methyltr (exact)
+4CL	af3	_entries/af3/af3_4CL.cif	A				cavity	210,211,212,213,258,329,330,331,332,352,353,354,355,356,357,358,381,439,441,453,456,547	ANL-superfamily enzyme; monomeric
+7OMT	alphafill	_entries/alphafill_C7SDN9.cif	A	SAM			ligand		single-chain file; ignored chain(s) CF, under 30 residues and so not a protomer; as 4'OMT; a SAM-dependent O-methyltransferase (exact)
+ADS	alphafill	_entries/alphafill_Q9AR04.cif	A	FPP			ligand		single-chain file; farnesyl diphosphate, the C15 substrate of amorphadiene synt (exact)
+AS	pdb	_entries/3S9V.cif	A				cavity	621,622,623,624,625,765,766,767,768,769,770,771,772,773	class I diterpene synthase; 3S9V has 4 chains and each carries a complete site
+BAS	pdb-other	_entries/3A5R.cif	A+B	HC4			ligand		type III PKS; 3A5R is the dimer; 4-coumaric acid, the substrate, bound in both subunits
+BBS	alphafill	_entries/alphafill_A0A075W0Z3.cif	A	FPP			ligand		single-chain file; farnesyl diphosphate, the C15 substrate of bisabolene/bisabo (exact)
+CHS	af3	_entries/af3/af3_CHS.cif	A+B				cavity	164,303,336	type III PKS; partner Met137 lines the Cys164 site
+CTS	alphafill	_entries/alphafill_A8CDR5.cif	A	HEM			ligand		single-chain file; protoporphyrin IX / Fe, the catalytic centre of this P450 (exact)
+CUS	pdb	_entries/3ALE.cif	A+B				cavity	174,316,349	type III PKS, as CHS
+ERG20	alphafill	_entries/alphafill_P08524.cif	A	FPP			ligand		single-chain file; farnesyl diphosphate, ERG20's product and the intermediate c (exact)
+GES	alphafill	_entries/alphafill_Q6USK1.cif	A	GST			cavity	286,320,323,324,327,466,469,473,476,477,480,552,553	single-chain file; geranyl S-thiolodiphosphate, the C10 non-hydrolysable analog (surrogate)
+GGPPS	af3	_entries/af3/af3_GGPPS.cif	A			1-18	cavity	90,91,94,95,97,98,101,102,107,130,158,161,162,165,168,192,193,196,229,232,233,246,251,256	trans-prenyltransferase; an 18-residue N-terminal tail swinging 9 A across AF3's samples, outside a core of 326 of 358, in the region a channel mouth would occupy
+GPPS	afdb	_entries/afdb_Q8LKJ2_v6.cif	A				cavity	164,165,168,169,174,176,179,238,242,245,266,267,331	trans-prenyltransferase
+LIC	pdb-other	_entries/2ONG.cif	A	F3P	MN		ligand		class I terpene synthase; 2ONG is a dimer but each subunit's site is complete; 2-fluorolinalyl diphosphate: the deposited component in BOTH 2ONG and 2ONH despite 2ONG's title saying fluorogeranyl -- the analogue isomerised in the crystal; the catalytic trinuclear manganese cluster
+MYS	alphafill	_entries/alphafill_Q93X23.cif	A	GST			cavity	62,63,309,310,311,312,344,347,348,351,488,491,495,499,502,507,567,571,573,574,575	single-chain file; as GES (surrogate)
+NES	afdb	_entries/afdb_A0A1J0CL47_v6.cif	A				cavity	273,274,275,276,277,417,418,419,420,421,422,423,424,425	single-chain file
+OCS	alphafill	_entries/alphafill_A4FVP2.cif	A	GST			cavity	31,32,282,283,285,317,320,321,324,458,461,465,468,469,472,474,477,540,542,543,544	single-chain file; as GES (surrogate)
+RAS	afdb	_entries/afdb_A0A0A7RA06_v6.cif	A				cavity	152,156,157,158,234,247,248,249,250,277,278,279,280,296,324,363,364,365,366,367,368	single-chain file
+REPI	afdb	_entries/afdb_A0A0H4IM19_v6.cif	A				cavity	601,602,603,604,630,631,635,665,698,699,744,745,766,792,793,794,795,796,797,798,800,802,808,823,825,829,840,841,842,843,844,848,851,852,877	single-chain file
+RNMT	alphafill	_entries/alphafill_A0A1C9U5X5.cif	A	SAM			ligand		single-chain file; as 4'OMT; a SAM-dependent N-methyltransferase (exact)
+SQS	af3	_entries/af3/af3_SQS.cif	A				cavity	18,19,20,21,22,26,37,40,41,44,45,48,51,52,121,125,144,148,149,152,153,156,160,173,176,177,180,181,184,188,195,223,235,236	squalene synthase; site within one subunit
+STS	afdb	_entries/afdb_B2MWQ8_v6.cif	A				cavity	162,301,334	type III PKS, but the source is a single-chain model; the dimer partner is absent and the site is therefore incomplete -- recorded as a known limitation
+TS	pdb	_entries/3P5P.cif	A	A3C	MG		ligand		class I diterpene synthase; single chain; the substrate analogue in 3P5P; the catalytic trinuclear magnesium cluster

@@ -154,7 +154,7 @@ class TestPatchGradient:
 
 
 class TestClassPalette:
-    def test_defaults_follow_the_p5d_map(self):
+    def test_defaults_follow_the_earlier_map(self):
         p = ClassPalette()
         assert p.classes["CHANNEL"] == "magenta"
         assert p.classes["AVOID"] == "grey60"

@@ -1,6 +1,6 @@
 """Cameras for channel figures, and which poses get a .pse or an SVG.
 
-The default frame, ``rotated0``, is the **angle frame** of the p5c figures: it
+The default frame, ``rotated0``, is the **angle frame** of the the earlier figures: it
 puts the iMARS construction in the plane of the page so the figure can be
 measured off the image.
 
@@ -10,7 +10,7 @@ measured off the image.
 
 so the segment P2-P3 is drawn at the *true* O_IC and its length is the *true*
 D_IC, then the whole thing is turned 180 degrees about the vertical so the
-**upstream** enzyme sits on the LEFT (p5c had green on the right once, because
+**upstream** enzyme sits on the LEFT (an earlier session had green on the right once, because
 "x axis = O_IC 0" was taken literally, and that was not what was wanted).
 After the flip the segment P2-P3 rises at ``180 - O_IC`` from the horizontal,
 which is the arithmetic the SVG's angle arc relies on.
@@ -498,7 +498,7 @@ def spread_in_view(anchors, x_axis, y_axis, *, min_sep=16.0,
     ``bounds`` is an optional ``(u_lo, u_hi, v_lo, v_hi)`` box in the same
     screen axes. Anchors are kept inside it, so a label pushed apart from its
     neighbours cannot be pushed off the edge of the frame instead -- which is
-    what happened to the right-hand labels of the p6a hotspot map, where
+    what happened to the right-hand labels of the worked example's hotspot map, where
     separation worked but one name still ran off the picture.
 
     Returns an ``(N, 3)`` array of displacements to add to ``anchors``.

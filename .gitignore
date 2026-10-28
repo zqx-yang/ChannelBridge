@@ -40,8 +40,11 @@ CLAUDE.local.md
 
 # The iMARS example set is reproducible rather than bundled: its structures
 # are deposited entries that `examples/iMARS/run_examples.py fetch` pulls,
-# and everything else under it is computed. The two decision tables, the 19
-# pair files and the script ARE committed -- the decisions, not the data.
+# and everything else under it is computed. The six decision tables
+# (enzymes, structures, inputs, af_ligands, start_sites, pairs), the 19 pair
+# files, the nine scripts and figures/ ARE committed -- the decisions, not
+# the data. report.tsv is excluded because it is an OUTPUT of `tunnels`,
+# not a decision: it changes whenever CAVER or the code changes.
 examples/iMARS/_entries/
 examples/iMARS/*/input/
 examples/iMARS/*/output/

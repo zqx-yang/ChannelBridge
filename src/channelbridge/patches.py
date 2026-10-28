@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 __all__ = [
     "ANCHOR",
@@ -61,6 +61,7 @@ __all__ = [
     "geometry_score",
     "grow_avoid",
     "patch_score",
+    "pick_hotspots",
     "write_patch_table",
     "write_residue_table",
 ]
@@ -110,7 +111,7 @@ class Residue:
     #: more than one mouth, and a binder capping a secondary one blocks the
     #: channel just as effectively -- so SHADOW is tested against all of
     #: them, while the table reports the primary. Residues 100 and 103 of
-    #: p6a's GDH are SHADOW on exactly this basis: 22 A off the primary axis,
+    #: the worked example's GDH are SHADOW on exactly this basis: 22 A off the primary axis,
     #: inside a secondary mouth's cylinder.
     openings: List[Tuple[float, float]] = field(default_factory=list)
 
@@ -133,7 +134,7 @@ class Residue:
 
 @dataclass
 class PatchParams:
-    """Every threshold the stage uses, with the values p6a was run at.
+    """Every threshold the stage uses, with the values the worked example was run at.
 
     These are the defaults of the original script, kept exactly: changing one
     silently would make old and new patch tables incomparable.
@@ -362,6 +363,80 @@ _PATCH_COLUMNS = ("rank", "score", "geom_score", "seed", "n_res", "anchors",
                   "hotspot_residues", "sequence")
 
 
+#: How many residues of a patch become hotspots. A patch is 7-14 residues;
+#: a generator wants the handful the binder should actually lock onto, not
+#: the whole epitope. Five is the worked example's value and BindCraft's
+#: advice ("several surface residues within a radial patch").
+N_HOTSPOTS = 5
+
+#: Below this solvent-accessible area a residue cannot be contacted by a
+#: binder, so it is not a hotspot however good its type.
+HOTSPOT_MIN_SASA = 15.0
+
+
+def pick_hotspots(members: Sequence[str], info: Mapping[str, Tuple[str, float]],
+                  *, n: int = N_HOTSPOTS,
+                  min_sasa: float = HOTSPOT_MIN_SASA,
+                  anchors_only: bool = True) -> List[Tuple[str, str]]:
+    """``n`` residues of one patch to hand a generator, in sequence order.
+
+    *members* are the patch's residue ids; *info* maps a residue id to
+    ``(resname, sasa)``. Returns ``[(resi, resname)]``, which may be SHORTER
+    than *n* -- see below.
+
+    Two rules, and they pull against each other.
+
+    **Anchors only.** A hotspot should be one of the big, few-rotamer
+    hydrophobics a binder actually locks onto (:data:`ANCHOR`: F, Y, W, I, L,
+    M), which is also BindCraft's advice for choosing a site. A patch of 7-14
+    residues contains plenty that are not: the whole patch handed over as
+    hotspots includes glycines, alanines and prolines, and those are the
+    three residue types RFdiffusion3's ``TIP`` keyword is not defined for --
+    so an unfiltered patch forces a per-residue atom table that exists only
+    to describe residues that should not have been hotspots.
+
+    **Spread.** Hotspots clustered on one turn of a helix tell a generator
+    far less about where the binder should sit than ones that span the patch,
+    so the patch is cut into ``n`` runs along the sequence and the best
+    candidate of each run is taken. Picking the top ``n`` by score alone
+    collapses onto whichever element happens to be most exposed.
+
+    A run with no anchor contributes nothing rather than its best
+    non-anchor, so a patch with three usable anchors yields three hotspots.
+    That is the honest answer: the alternative is to pad the list with
+    residues the binder cannot grip, which reads as five anchors to anyone
+    downstream. ``anchors_only=False`` restores the older behaviour of
+    taking the best of every run whatever its type.
+
+    Anything under *min_sasa* is too buried to be contacted and is never
+    returned, anchor or not.
+    """
+    have = [m for m in members if m in info
+            and float(info[m][1]) >= float(min_sasa)
+            and (not anchors_only or (info[m][0] or "").upper() in ANCHOR)]
+    if not have:
+        return []
+    have.sort(key=_as_int)
+
+    def score(m: str) -> float:
+        resn, sasa = info[m]
+        s = min(float(sasa), 120.0) / 120.0
+        if (resn or "").upper() in ANCHOR:
+            s += 0.6
+        return s
+
+    n = max(1, int(n))
+    out: List[str] = []
+    for i in range(n):
+        run = have[i * len(have) // n:(i + 1) * len(have) // n]
+        if run:
+            best = max(run, key=score)
+            if best not in out:
+                out.append(best)
+    out.sort(key=_as_int)
+    return [(m, info[m][0]) for m in out]
+
+
 def write_patch_table(path: str, patches: Sequence[Patch]) -> str:
     """The ``<NAME>_hotspot_patches.tsv`` the later stages read.
 
@@ -400,3 +475,111 @@ def write_residue_table(path: str, chain: str, residues: Dict[str, Residue],
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     return path
+
+
+# --------------------------------------------------- a partner's footprint
+#
+# A binding partner that is NOT part of the design -- ferredoxin on FNR -- is
+# still a reason not to put an epitope somewhere. It enters as its own
+# complex, superposed onto the target, rather than as an extra chain in the
+# target file: adding the partner to the structure would also make it a
+# steric obstacle in every pose, which is a different and much stronger
+# claim than "do not put a binder here".
+
+@dataclass(frozen=True)
+class Footprint:
+    """Where a partner protein would sit on the target."""
+
+    #: Residue ids of the target the partner covers.
+    residues: Tuple[str, ...]
+    #: How well the partner complex's own copy of the target superposed.
+    rmsd: float
+    #: How many residues the superposition was solved on.
+    n_matched: int
+    contact: float
+
+    @property
+    def selection(self) -> str:
+        """As a PyMOL selection, for the classification stage to consume."""
+        return "resi " + "+".join(self.residues) if self.residues else ""
+
+    def warnings(self) -> List[str]:
+        out = []
+        if self.rmsd > 3.0:
+            out.append(
+                "the partner complex superposed at %.2f A RMSD over %d residues, "
+                "which is high for a superposition whose job is to place a "
+                "partner: check the align chain is the right one before "
+                "trusting this footprint" % (self.rmsd, self.n_matched))
+        if not self.residues:
+            out.append(
+                "no target residue lies within %.1f A of the partner, so the "
+                "footprint is empty -- either the chains are wrong or the two "
+                "do not touch" % self.contact)
+        return out
+
+
+def _ca_by_residue(atoms, chain: Optional[str] = None) -> Dict[str, Tuple[float, float, float]]:
+    out = {}
+    for a in atoms:
+        if a.hetatm or a.name.strip() != "CA":
+            continue
+        if chain is not None and a.chain != chain:
+            continue
+        out["%d%s" % (a.resseq, a.icode.strip())] = a.xyz
+    return out
+
+
+def partner_footprint(target_atoms, target_chain: Optional[str], partner_atoms,
+                      align_chain: str, partner_chain: str, *,
+                      contact: float = 5.0) -> Footprint:
+    """Target residues a partner protein would cover.
+
+    *partner_atoms* holds a complex of the target (``align_chain``) with its
+    partner (``partner_chain``). That copy of the target is superposed onto
+    ours, the same transform is applied to the partner, and every target
+    residue within *contact* angstroms of it is returned.
+
+    The correspondence is by residue number, which is what makes this cheap
+    and is the normal case for a homolog of the same protein; residues the
+    two do not share are simply not used, and ``n_matched`` says how many
+    were. A high ``rmsd`` means the chains were probably mispaired, so it is
+    reported rather than swallowed -- see :meth:`Footprint.warnings`.
+    """
+    import numpy as np
+
+    from .geometry import superpose
+
+    ours = _ca_by_residue(target_atoms, target_chain)
+    theirs = _ca_by_residue(partner_atoms, align_chain)
+    shared = sorted(set(ours) & set(theirs), key=_as_int)
+    if len(shared) < 3:
+        raise ValueError(
+            "the partner complex's chain %s shares %d residue number(s) with "
+            "the target%s, too few to superpose on. The two are probably not "
+            "the same protein, or are numbered differently."
+            % (align_chain, len(shared),
+               " chain %s" % target_chain if target_chain else ""))
+    rot, trans, rmsd = superpose(
+        np.array([theirs[r] for r in shared]),
+        np.array([ours[r] for r in shared]))
+
+    partner_xyz = np.array([a.xyz for a in partner_atoms
+                            if a.chain == partner_chain and not a.hetatm], float)
+    if not len(partner_xyz):
+        raise ValueError(
+            "the partner complex has no polymer atoms in chain %s. Chains "
+            "present: %s" % (partner_chain, ", ".join(sorted(
+                {a.chain for a in partner_atoms if a.chain.strip()}))))
+    moved = partner_xyz @ rot.T + trans
+
+    hits = set()
+    cut2 = float(contact) ** 2
+    for a in target_atoms:
+        if a.hetatm or (target_chain is not None and a.chain != target_chain):
+            continue
+        d2 = ((moved - np.asarray(a.xyz, float)) ** 2).sum(1)
+        if d2.min() <= cut2:
+            hits.add("%d%s" % (a.resseq, a.icode.strip()))
+    return Footprint(residues=tuple(sorted(hits, key=_as_int)), rmsd=rmsd,
+                     n_matched=len(shared), contact=float(contact))

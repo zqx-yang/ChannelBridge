@@ -1,5 +1,10 @@
 """Stage 1: turn a deposited structure into one this pipeline can measure.
 
+Reads PDB or mmCIF and writes PDB. This is the only stage that accepts
+mmCIF: CAVER cannot read it, so a later stage taking one would show up as
+an empty tunnel rather than as a wrong file type. `channelbridge.io.mmcif`
+explains the auth_* vs label_* numbering trap that conversion walks into.
+
 Small, deliberately. Preparation for channel work is not the same as
 preparation for docking or simulation: no protonation, no minimisation, no
 rotamer fixing. What matters here is which atoms are present, because every
@@ -38,7 +43,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from ..io.pdb import AtomArray, read_pdb
+from ..io import AtomArray, pdb_column_problems, read_structure
 
 __all__ = ["PrepParams", "PrepReport", "prepare", "write_pdb"]
 
@@ -77,6 +82,34 @@ class PrepParams:
     #: Only one chain may be kept when renaming: collapsing several chains
     #: onto one id would merge two protomers into one object.
     relabel: Optional[str] = None
+    #: How close a het residue in ANOTHER chain must come to a kept chain to
+    #: count as belonging to it.
+    #:
+    #: Needed because a predicted or transplanted model does not put a ligand
+    #: in its protein's chain. AlphaFill gives every transplant its own chain
+    #: id (one model here has the protein in A and ligands in B..Z and AA..AW),
+    #: so `--chain A --keep FPP` keeps the protein and none of the ligands, the
+    #: report says "ligands kept: none", and the channel then measured runs
+    #: through the empty site whose occupant was the point of the exercise.
+    #: Contact, not chain id, is what makes a ligand this protein's.
+    ligand_contact: float = 4.0
+    #: Residue-number ranges to drop, as ``[(first, last)]``.
+    #:
+    #: For a disordered terminus, which is a wall to a sphere-rolling
+    #: algorithm exactly as a water is -- and unlike a water it is attached, so
+    #: it cannot be dropped by residue name. GGPPS's model carries an
+    #: 18-residue N-terminal tail that swings 9 A across AlphaFold3's five
+    #: samples, around a core of 326 of 358, sitting where a channel mouth
+    #: would be. Dropping atoms changes the answer, so each range is reported.
+    drop_residues: Sequence[Tuple[int, int]] = ()
+    #: What to do when several copies of one kept ligand touch the kept chain.
+    #: ``"all"`` keeps them (faithful; correct for a protein with two real
+    #: cofactor sites). ``"best"`` keeps the copy with the most protein
+    #: contacts, which is what a transplanted model needs: AlphaFill will
+    #: place four copies of GPP from four donors, three of them redundant or
+    #: half on the surface, and each extra copy is a wall in somebody's
+    #: channel. Both choices are reported per copy.
+    ligand_copies: str = "all"
 
 
 @dataclass
@@ -88,6 +121,16 @@ class PrepReport:
     relabelled_to: Optional[str] = None
     ligands_kept: Dict[str, int] = field(default_factory=dict)
     ligands_dropped: Dict[str, int] = field(default_factory=dict)
+    #: One row per copy of a kept ligand that came from another chain:
+    #: ``(resname, chain, resseq, contacts, kept)``. Printed in full, because
+    #: "which copy" is a decision and a silent one is a wrong one.
+    ligand_copies: List[Tuple[str, str, int, int, bool]] = field(default_factory=list)
+    #: ``(resname, chain, old resseq, new resseq)`` for a ligand renumbered to
+    #: avoid colliding with a protein residue after `--relabel`.
+    ligands_renumbered: List[Tuple[str, str, int, int]] = field(default_factory=list)
+    #: ``[(first, last)]`` residue ranges dropped by `--drop-resi`.
+    residues_dropped: List[Tuple[int, int]] = field(default_factory=list)
+    atoms_dropped_by_range: int = 0
     waters_dropped: int = 0
     altlocs_resolved: int = 0
     atoms_in: int = 0
@@ -109,6 +152,17 @@ class PrepReport:
         if self.ligands_dropped:
             lines.append("         dropped %s" % ", ".join(
                 "%s x%d" % (k, v) for k, v in sorted(self.ligands_dropped.items())))
+        for resname, chain, resseq, contacts, kept in self.ligand_copies:
+            lines.append("         %s %s/%d from another chain, %d contact(s): %s"
+                         % (resname, chain, resseq, contacts,
+                            "kept" if kept else "dropped as a redundant copy"))
+        for resname, chain, old, new in self.ligands_renumbered:
+            lines.append("         %s %s/%d renumbered to %d (it collided with "
+                         "a protein residue)" % (resname, chain, old, new))
+        if self.residues_dropped:
+            lines.append("residues dropped %s (%d atom(s))" % (
+                ", ".join("%d-%d" % r for r in self.residues_dropped),
+                self.atoms_dropped_by_range))
         if self.waters_dropped:
             lines.append("waters   dropped %d atom(s)" % self.waters_dropped)
         if self.altlocs_resolved:
@@ -122,7 +176,7 @@ class PrepReport:
 def prepare(structure, params: Optional[PrepParams] = None) -> Tuple[AtomArray, PrepReport]:
     """Select atoms from a structure. Nothing is moved and nothing is added."""
     params = params or PrepParams()
-    atoms = read_pdb(structure) if isinstance(structure, str) else structure
+    atoms = read_structure(structure) if isinstance(structure, str) else structure
     rep = PrepReport(atoms_in=len(atoms.atoms))
 
     polymer_chains = []
@@ -149,10 +203,15 @@ def prepare(structure, params: Optional[PrepParams] = None) -> Tuple[AtomArray, 
 
     keep = {r.upper() for r in params.keep_ligands}
     drop = {r.upper() for r in params.drop_ligands}
+    if params.ligand_copies not in ("all", "best"):
+        raise ValueError("ligand_copies must be 'all' or 'best', got %r"
+                         % (params.ligand_copies,))
+
+    adopted = _adopt_ligands(atoms, want, keep, params, rep)
 
     kept = []
     for a in atoms.atoms:
-        if a.chain not in want:
+        if a.chain not in want and _res_key(a) not in adopted:
             continue
         resn = (a.resname or "").upper()
         if a.hetatm:
@@ -171,24 +230,45 @@ def prepare(structure, params: Optional[PrepParams] = None) -> Tuple[AtomArray, 
             rep.ligands_kept[resn] = rep.ligands_kept.get(resn, 0) + 1
         kept.append(a)
 
+    if params.drop_residues:
+        ranges = [(int(a), int(b)) for a, b in params.drop_residues]
+        for a, b in ranges:
+            if a > b:
+                raise ValueError(
+                    "--drop-resi range %d-%d runs backwards" % (a, b))
+        before = len(kept)
+        kept = [x for x in kept
+                if x.hetatm or not any(a <= x.resseq <= b for a, b in ranges)]
+        rep.residues_dropped = ranges
+        rep.atoms_dropped_by_range = before - len(kept)
+
     if not params.keep_altlocs:
         kept, n = _resolve_altlocs(kept)
         rep.altlocs_resolved = n
 
     if params.relabel is not None:
-        new = str(params.relabel)
-        if len(new) != 1:
-            raise ValueError(
-                "--relabel takes a single chain id, got %r" % params.relabel)
-        if len(want) > 1:
-            raise ValueError(
-                "cannot rename %d chains (%s) to one id %r: that would merge "
-                "separate protomers into one chain. Keep one chain, or leave "
-                "the ids alone." % (len(want), "+".join(want), new))
         import dataclasses
 
-        kept = [dataclasses.replace(a, chain=new) for a in kept]
-        rep.relabelled_to = new
+        mapping = _relabel_map(str(params.relabel), want)
+        if len(mapping) == 1:
+            new = next(iter(mapping.values()))
+            if adopted:
+                kept = _renumber_collisions(kept, new, adopted, rep)
+            kept = [dataclasses.replace(a, chain=new) for a in kept]
+            rep.relabelled_to = new
+        else:
+            # A mapping, one new id per kept chain. An adopted ligand follows
+            # the chain it was adopted INTO, which is the first kept chain:
+            # it was selected by contact with the kept protein as a whole and
+            # a ligand cannot belong to two protomers at once.
+            first = mapping[want[0]]
+            if adopted:
+                kept = _renumber_collisions(kept, first, adopted, rep)
+            kept = [dataclasses.replace(
+                a, chain=mapping.get(a.chain, first)
+                if _res_key(a) not in adopted else first) for a in kept]
+            rep.relabelled_to = ",".join(
+                "%s->%s" % (k, mapping[k]) for k in want)
 
     rep.atoms_out = len(kept)
     asked = keep - set(rep.ligands_kept)
@@ -199,6 +279,154 @@ def prepare(structure, params: Optional[PrepParams] = None) -> Tuple[AtomArray, 
     if not any(not a.hetatm for a in kept):
         raise ValueError("nothing is left after preparation: no polymer atoms kept")
     return AtomArray(kept), rep
+
+
+def _relabel_map(spec: str, want: Sequence[str]) -> Dict[str, str]:
+    """``{old chain: new chain}`` from a `--relabel` value.
+
+    Two forms, because two things are wanted and only one of them used to be
+    possible. A bare id (``U``) renames the single kept chain, and refuses
+    more than one, because collapsing two protomers onto one id merges them.
+    A mapping (``A:U,B:V``) renames each kept chain separately, which is NOT
+    a merge and is what a kept dimer needs: the pose stage refuses a complex
+    whose two sides share a chain id, so a dimeric side has to be given ids
+    that the other side does not use.
+
+    The mapping must be injective and must name every kept chain, since a
+    chain left out would keep an id the mapping may have just handed to
+    another chain.
+    """
+    spec = spec.strip()
+    if ":" not in spec:
+        if len(spec) != 1:
+            raise ValueError(
+                "--relabel takes a single chain id or a mapping like "
+                "'A:U,B:V', got %r" % spec)
+        if len(want) > 1:
+            raise ValueError(
+                "cannot rename %d chains (%s) to one id %r: that would merge "
+                "separate protomers into one chain. Use a mapping "
+                "(--relabel %s) or leave the ids alone."
+                % (len(want), "+".join(want), spec,
+                   ",".join("%s:%s" % (c, c) for c in want)))
+        return {want[0]: spec}
+    out: Dict[str, str] = {}
+    for part in spec.split(","):
+        if part.count(":") != 1:
+            raise ValueError("--relabel mapping entry %r is not old:new" % part)
+        old_id, new_id = (x.strip() for x in part.split(":"))
+        if len(new_id) != 1:
+            raise ValueError("chain id %r is not a single character" % new_id)
+        if old_id in out:
+            raise ValueError("--relabel names chain %r twice" % old_id)
+        out[old_id] = new_id
+    missing = [c for c in want if c not in out]
+    if missing:
+        raise ValueError(
+            "--relabel does not name kept chain(s) %s; every kept chain needs "
+            "a new id or it may collide with one this mapping hands out"
+            % ", ".join(missing))
+    extra = [c for c in out if c not in want]
+    if extra:
+        raise ValueError("--relabel names chain(s) %s, which are not kept"
+                         % ", ".join(extra))
+    if len(set(out.values())) != len(out):
+        raise ValueError("--relabel maps two chains onto one id, which would "
+                         "merge them: %r" % spec)
+    return out
+
+
+def _res_key(a) -> Tuple[str, int, str, str]:
+    """One het residue, identified the way a PDB file identifies it."""
+    return (a.chain, a.resseq, a.icode, a.resname)
+
+
+def _adopt_ligands(atoms: AtomArray, want: Sequence[str], keep, params,
+                   rep: "PrepReport"):
+    """Which het residues OUTSIDE the kept chains belong to them anyway.
+
+    Only residues whose name was explicitly asked for are considered: a
+    neighbouring protomer's cofactor is not adopted because nobody named it.
+    Contact is counted against the kept chains' atoms, so a copy sitting on
+    the surface loses to one in the site.
+    """
+    if not keep:
+        return set()
+    import numpy as np
+
+    poly = np.asarray([a.xyz for a in atoms.atoms
+                       if a.chain in want and not a.hetatm], dtype=float)
+    if not len(poly):
+        return set()
+
+    candidates: Dict[Tuple, list] = {}
+    for a in atoms.atoms:
+        if a.hetatm and a.chain not in want and (a.resname or "").upper() in keep:
+            candidates.setdefault(_res_key(a), []).append(a.xyz)
+    if not candidates:
+        return set()
+
+    contacts = {}
+    for key, xyz in candidates.items():
+        d = np.linalg.norm(poly[:, None, :] - np.asarray(xyz)[None, :, :], axis=2)
+        contacts[key] = int((d.min(axis=1) <= params.ligand_contact).sum())
+
+    touching = {k for k, n in contacts.items() if n > 0}
+    chosen = set(touching)
+    if params.ligand_copies == "best":
+        by_name: Dict[str, list] = {}
+        for k in touching:
+            by_name.setdefault(k[3].upper(), []).append(k)
+        chosen = set()
+        for keys in by_name.values():
+            keys.sort(key=lambda k: (-contacts[k], k[0], k[1]))
+            chosen.add(keys[0])
+    for key in sorted(candidates, key=lambda k: (k[3], -contacts[k], k[0], k[1])):
+        rep.ligand_copies.append(
+            (key[3], key[0], key[1], contacts[key], key in chosen))
+    return chosen
+
+
+def _renumber_collisions(kept, new_chain, adopted, rep: "PrepReport"):
+    """Give an adopted ligand a residue number nothing else in the chain uses.
+
+    Renaming the chain is what makes this necessary: AlphaFill numbers every
+    transplant 1, so a ligand moved into the protein's chain becomes A/1 --
+    the same address as the protein's first residue. Downstream, a residue is
+    selected by chain and number, so the collision is not cosmetic. Numbers
+    are identity, not geometry: nothing is moved here either.
+    """
+    import dataclasses
+
+    # Every non-adopted atom is about to become *new_chain*, so the numbers
+    # already taken are taken THERE. Comparing against the chain they still
+    # carry finds no collision and lets the ligand keep its number: the whole
+    # point of the renumber.
+    taken = {(new_chain, a.resseq, a.icode) for a in kept
+             if _res_key(a) not in adopted}
+    nxt = max((n for _, n, _ in taken), default=0) + 1
+    assigned: Dict[Tuple, int] = {}
+    out = []
+    for a in kept:
+        key = _res_key(a)
+        if key not in adopted:
+            out.append(a)
+            continue
+        if key not in assigned:
+            if (new_chain, a.resseq, a.icode) in taken:
+                while (new_chain, nxt, "") in taken:
+                    nxt += 1
+                assigned[key] = nxt
+                taken.add((new_chain, nxt, ""))
+                rep.ligands_renumbered.append(
+                    (a.resname, key[0], a.resseq, nxt))
+                nxt += 1
+            else:
+                assigned[key] = a.resseq
+        new = assigned[key]
+        out.append(a if new == a.resseq
+                   else dataclasses.replace(a, resseq=new, icode=""))
+    return out
 
 
 def _resolve_altlocs(atoms):
@@ -236,7 +464,16 @@ def write_pdb(path: str, atoms: AtomArray, header: Sequence[str] = ()) -> str:
 
     LF because a CR sneaks into a field that a downstream tool then fails to
     parse, and the failure is a long way from the cause.
+
+    Raises if anything kept cannot fit a fixed-column PDB field. mmCIF input
+    makes that reachable: it has no column widths, so a two-letter chain id or
+    a five-character atom name writes into the field beside it and is then
+    parsed, without complaint, as something else.
     """
+    problems = pdb_column_problems(atoms.atoms)
+    if problems:
+        raise ValueError(
+            "%s cannot be written as PDB:\n  - %s" % (path, "\n  - ".join(problems)))
     lines = ["REMARK   1 %s" % h for h in header]
     for a in atoms.atoms:
         name = a.name if len(a.name) >= 4 else " %-3s" % a.name

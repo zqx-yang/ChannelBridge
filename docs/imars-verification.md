@@ -2,7 +2,8 @@
 
 Wang J, Ouyang X, Meng S, ..., Shi T, Zhao Y-L, Ni J (2025). **Rational
 multienzyme architecture design with iMARS.** *Cell* 188:1349–1362.
-Audit performed 2026-10-23 against the paper and its Tables S1–S7.
+Audit performed 2026-10-23 against the paper and its Tables S1–S7;
+their published scripts (Table S7) read and reproduced 2026-10-27.
 
 ChannelBridge uses the iMARS DO score. This document records how much of that
 has been checked against the paper's own published data, what has not, and
@@ -14,12 +15,12 @@ Yes, to a closer degree than expected: iMARS uses the same two tools.
 
 | | iMARS | ChannelBridge |
 |---|---|---|
-| structure | AlphaFold2 via ParaFold, top of 3 models, pLDDT ~90 | AlphaFold2/3, Boltz (prep stage) |
+| structure | AlphaFold2 via ParaFold, top of 3 models, pLDDT ~90 | whatever you prepare: deposited entries, AlphaFill, AlphaFold DB or AlphaFold3 |
 | active site | structure alignment to a homologous complex, else AutoDock Vina | explicit `site` selection in the pair file |
 | channels | **CAVER 3.0**, run from PyMOL on a local server | **CAVER 3.0.3**, run from a config |
 | channel chosen | "the top-ranked channel in each enzyme" | pair file `caver.cluster`, chosen on convergence + cofactor proximity + burial |
 | D_IC | distance between the outermost sphere centres of the two tunnels | same |
-| O_IC | angle at the upstream outermost sphere, arms to the upstream second-to-last sphere and to the downstream outermost sphere | same, but the arm is taken over a fixed arc length (see §5) |
+| O_IC | angle at the upstream outermost sphere, arms to the upstream second-to-last sphere and to the downstream outermost sphere | same, but the arm is taken over a fixed arc length (see §6) |
 | DO | `-0.0079*D_IC + 0.0012*O_IC + 0.7865`, confined to [0,1] | same, coefficient set recorded per run |
 | what is varied | the linker of a fusion protein | the pose of a binder-held pair |
 
@@ -38,9 +39,84 @@ The geometry definitions are quoted verbatim from the paper's Methods
 > enzyme, the centers of the outermost spheres of upstream and downstream
 > enzymes are connected sequentially.
 
-So our construction is theirs. The one substantive difference is §5.
+So our construction is theirs. The one substantive difference is §6.
 
-## 2. What is verified
+## 2. Their own code, read and reproduced
+
+§1 is built from the paper's prose. The supplement also publishes the
+**scripts** — Table S7A–S7F in `mmc8.xlsx` — and they turn that prose into
+something checkable. Table **S7E**, "Molecular docking and channel
+calculation", is the 56-line shell script that produced every D_IC and O_IC
+in the paper. Three things in it matter.
+
+**Which channel.** The script reads
+
+```sh
+last_line_A=`tail -n 2 ./get_dist_angle_tmp/out_A/data/clusters_timeless/tun_cl_001_1.pdb`
+```
+
+`tun_cl_001_1.pdb` is hard-coded. There is no priority floor, no minimum
+length, no check that the chain reaches solvent and no fallback: cluster 1,
+whatever it is. This is the paper's "the top-ranked channel in each enzyme",
+and it is the whole rule.
+
+**How P1 and P2 are found.** The next lines are
+
+```sh
+ARR_A=($last_line_A)
+last_indel_A=${ARR_A[2]}
+last_indel_A_1=`expr ${last_indel_A} - 1`
+```
+
+Run against a real CAVER cluster file, the last two lines are
+`CONECT  127  128` and a blank, so the flattened array is
+`[CONECT, 127, 128]` and `ARR_A[2]` is **128** — the index of the outermost
+sphere. `LAST_1` is then 127, the sphere before it. So:
+
+* **P2** = the outermost sphere of cluster 1, taken raw;
+* **P1** = the literal second-to-last sphere;
+* and `last_indel_A_1` is computed **for A only**. B contributes nothing but
+  its own outermost sphere.
+
+That confirms the construction in §1 from the code rather than from the
+prose, including the part most easily got wrong: **O_IC is one-sided and is
+measured on the upstream channel.** `channelbridge.geometry` does the same.
+
+It also shows the index is recovered by splitting the last two lines of a
+PDB into a shell array. That works only because the file ends with a blank
+line after a `CONECT` record naming the final sphere. A CAVER build that
+omitted either would put the atom name in `ARR_A[2]`, and `expr H - 1` would
+fail — or, with a different record order, succeed on the wrong number.
+
+**No normalisation.** Nothing in the script truncates the chain at the
+surface or resamples it. P2 is wherever cluster 1 happens to stop, which is
+set by the shell radius in `config_template.txt`. This is the mechanism
+behind the spread in their published D_IC (10–55 Å across the 19 pairs) and
+the reason ChannelBridge normalises before measuring — see
+[caver-builds.md](caver-builds.md).
+
+**S7F** confirms the scoring layer independently of §3: DO is an ordinary
+`sklearn.linear_model.LinearRegression` fitted on two columns against yield,
+with the intercept printed. There is no separate model. S7A is the same fit
+on the 100-linker 4CL-STS set, which is the one §3's regression reproduces.
+
+### What the supplement does not contain
+
+S7E references three files it does not ship:
+
+| referenced | holds | consequence |
+|---|---|---|
+| `template_files/config_template.txt` | every CAVER parameter except the start point | probe radius, shell radius, shell depth, clustering threshold and seed are all unknown |
+| `template_files/step1_template.pml` | how the active site is derived from the two separate models | the start point cannot be reproduced |
+| `template_files/step2_template.pml` | the distance and angle measurement | the only part recoverable from the prose, and it is |
+
+So the method is published to the level of its own wiring and not to the
+level of its parameters. A CAVER probe radius of 0.9 (CAVER's default) and
+1.4 (a water) differ by 18 clusters on our pilot domains; which they used is
+not recorded anywhere we can find. This is the main reason
+[the reproduction attempt](#5-what-is-not-verified) cannot close.
+
+## 3. What is verified
 
 The paper publishes D_IC, O_IC, DO and the measured product yield for 130
 fusion enzymes, with no coordinates. That is enough to verify the whole
@@ -77,7 +153,7 @@ r² = 0.735; on the independent validation set r² = 0.738, and that set reaches
 down to D_IC 17.4 Å — the fusion with the highest DO (0.827) is also the best
 measured (61.3 mg/L).
 
-## 3. Three inconsistent DO columns in the supplement
+## 4. Three inconsistent DO columns in the supplement
 
 Worth knowing before trusting any single iMARS table.
 
@@ -104,7 +180,7 @@ Quantification) and what its own regression derives. Secondary sources
 summarising the paper quote the same three constants and the same Pearson
 r = 0.86 against yield, which we reproduce as 0.857.
 
-## 4. What is **not** verified
+## 5. What is **not** verified
 
 That our **geometry extraction** reproduces theirs. Everything above tests
 `DO(D_IC, O_IC)`. Nothing tests `(D_IC, O_IC) ← structure`, because the paper
@@ -193,7 +269,7 @@ The outcome is informative either way:
   on its own.
 
 Note this fusion sits at D_IC 17.4 Å, which is both their validated floor and
-almost exactly where this project's best pose sits (17.0 Å) — so it is the single most
+almost exactly where the worked example's best pose sits (15.0 Å) — so it is the single most
 relevant point in their entire dataset for our purposes.
 
 ### Route C — what cannot be done
@@ -203,7 +279,7 @@ have PDB entries) does not help: the paper reports no tunnel geometry for the
 isolated enzymes, only for fusions. There is no published per-enzyme number to
 check against.
 
-## 5. Where we knowingly differ
+## 6. Where we knowingly differ
 
 Three deliberate deviations, each recorded so a reviewer can see them.
 
@@ -216,20 +292,20 @@ taking the literal second-to-last sphere would measure the angle over a
 0.26 Å baseline. See [caver-builds.md](caver-builds.md).
 
 **Channel selection.** iMARS always takes CAVER's top-ranked cluster. The
-reference run of the worked example chose the FNR channel empirically (cluster 2, burial 18, over cluster 1,
-burial 37) because it scored better in the pose search. That is a departure
+worked example chose the FNR channel empirically (cluster 2, burial 18, over
+cluster 1, burial 37) because it scored better in the pose search. That is a departure
 from the published method and should be stated in any methods text. The pair
 file records the choice explicitly.
 
 **Extrapolation range.** The DO regression was fitted on fusion proteins whose
 channel exits were **45–91 Å** apart and validated against yields down to
 **17.4 Å**. A binder-held pair can be much closer: our pose grid runs 6–36 Å,
-and the worked example's best pose sits at 17.0 Å — just below the validated floor. DO is a
+and the worked example's best pose sits at 15.0 Å — below the validated floor. DO is a
 linear fit with no support below that; it keeps rising as D_IC falls, which is
 an assumption rather than a measurement. `extrapolation_note()` flags it, and
 a methods section should quote the fitted range alongside any DO.
 
-## 6. Reproducing this audit
+## 7. Reproducing this audit
 
 ```bash
 export CHANNELBRIDGE_IMARS_ST2=/path/to/1-s2.0-S0092867424014715-mmc3.xlsx

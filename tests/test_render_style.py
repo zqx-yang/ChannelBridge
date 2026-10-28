@@ -80,12 +80,18 @@ class TestDefaults:
         assert DEFAULT_STYLE.palette.base("binder") == hex_to_rgb(DESIGNED_BINDER_HEX)
 
     def test_ligands_are_not_lightened(self):
+        """Cofactors read through two translucent surfaces, so they keep
+        their full colour. Purple since 2026-10-27: the D_IC/O_IC annotation
+        took pure magenta and the two were then the same colour."""
         assert DEFAULT_STYLE.palette.spec("ligand").lighten == 0.0
-        assert DEFAULT_STYLE.palette.rgb("ligand") == (1.0, 0.0, 1.0)
+        assert DEFAULT_STYLE.palette.rgb("ligand") == (0.55, 0.1, 0.9)
 
-    def test_tunnel_is_red_and_unlightened(self):
+    def test_tunnel_is_magenta_and_unlightened(self):
+        """Magenta since 2026-10-27: everything to do with the channel is
+        one colour, and lightening a 30 %-opacity fill loses it."""
         r, g, b = DEFAULT_STYLE.palette.rgb("tunnel")
-        assert r > 0.8 and g < 0.2 and b < 0.2
+        assert r > 0.8 and g < 0.2 and b > 0.8
+        assert DEFAULT_STYLE.palette.spec("tunnel").lighten == 0.0
 
     def test_both_enzymes_are_transparent_and_nothing_is_opaque(self):
         assert DEFAULT_STYLE.transparency_for("upstream") == pytest.approx(0.65)
@@ -122,7 +128,7 @@ class TestColorOverrides:
 
     def test_a_mapping_can_set_lighten_alone(self):
         p = Palette().with_overrides({"ligand": {"lighten": 0.4}})
-        assert p.base("ligand") == (1.0, 0.0, 1.0)
+        assert p.base("ligand") == (0.55, 0.1, 0.9)
         assert p.spec("ligand").lighten == pytest.approx(0.4)
 
     def test_british_spelling_accepted(self):
@@ -299,3 +305,60 @@ class TestColorSpec:
 
     def test_accepts_a_name_a_hex_or_numbers(self):
         assert ColorSpec("red").rgb == ColorSpec("#ff0000").rgb == ColorSpec([1, 0, 0]).rgb
+
+
+class TestTheChannelIsMagentaAndThePatchIsRed:
+    """Everything to do with the channel is magenta; the epitope is red.
+
+    One colour was doing three jobs: the channel, the D_IC/O_IC marks and
+    the hotspot patch all read `annotation`. They are three roles now, which
+    is what lets the channel and its measurement share a colour deliberately
+    while the patch takes a different one. User's defaults, 2026-10-27;
+    every role is still overridable.
+    """
+
+    def test_the_channel_is_magenta(self):
+        assert DEFAULT_STYLE.palette.rgb("tunnel") == (1.0, 0.0, 1.0)
+
+    def test_the_measurement_is_the_same_magenta(self):
+        assert (DEFAULT_STYLE.palette.rgb("annotation")
+                == DEFAULT_STYLE.palette.rgb("tunnel"))
+
+    def test_it_is_still_its_own_role(self):
+        """Sharing a value is not sharing a role: either can move alone."""
+        p = Palette().with_overrides({"annotation": (0.0, 0.0, 0.0)})
+        assert p.rgb("annotation") == (0.0, 0.0, 0.0)
+        assert p.rgb("tunnel") == (1.0, 0.0, 1.0)
+
+    def test_the_pose_patch_is_red_and_has_its_own_role(self):
+        assert DEFAULT_STYLE.palette.rgb("patch") == (0.9, 0.05, 0.05)
+        assert "patch" in DEFAULT_STYLE.palette.roles
+
+    def test_the_patch_is_not_the_channel_colour(self):
+        """The epitope and the channel must not be mistaken for each other."""
+        assert (DEFAULT_STYLE.palette.rgb("patch")
+                != DEFAULT_STYLE.palette.rgb("tunnel"))
+
+    def test_the_cofactor_is_not_the_channel_colour_either(self):
+        """It sits inside the channel, so it cannot share its hue."""
+        assert (DEFAULT_STYLE.palette.rgb("ligand")
+                != DEFAULT_STYLE.palette.rgb("tunnel"))
+
+    def test_the_defaults_do_not_warn_about_themselves(self):
+        """A default configuration that reports its own colours as
+        indistinguishable trains people to ignore the warning."""
+        assert DEFAULT_STYLE.palette.indistinguishable() == []
+
+    def test_the_deliberate_pair_is_skipped_and_nothing_else_is(self):
+        from channelbridge.render.style import SAME_BY_DESIGN
+
+        assert frozenset(("tunnel", "annotation")) in SAME_BY_DESIGN
+        p = Palette().with_overrides({"downstream": {"color": (0.0, 1.0, 0.0),
+                                                     "lighten": 0.55}})
+        assert "downstream/upstream" in p.indistinguishable()
+
+    def test_every_role_is_still_overridable(self):
+        p = Palette().with_overrides({"annotation": (0.0, 0.0, 0.0),
+                                      "patch": (1.0, 1.0, 0.0)})
+        assert p.rgb("annotation") == (0.0, 0.0, 0.0)
+        assert p.rgb("patch") == (1.0, 1.0, 0.0)

@@ -66,11 +66,13 @@ __all__ = [
     "CaverParams",
     "CavityPoint",
     "Cluster",
+    "Loaded",
     "Selection",
     "caverdock_note",
     "cavity_start_point",
     "find_caver",
     "parse_residue_id",
+    "read_log",
     "read_summary",
     "run_caver",
     "select",
@@ -449,6 +451,58 @@ def run_caver(structure: str, config: str, out_dir: str, *,
             "the starting point is outside the structure or inside an atom -- "
             "check the warnings in %s." % (out_dir, out_dir))
     return out_dir
+
+
+@dataclass
+class Loaded:
+    """How much of the structure CAVER actually put in its Voronoi diagram.
+
+    Worth reading, because the gap between "what is in the file" and "what
+    CAVER measured" is silent in both directions. ``exclude_residue_names``
+    removes a residue and says nothing; a starting point inside a residue
+    removes that residue too and says nothing; and an atom whose occupancy
+    is below 1.0 is not loaded at all, which is how an AlphaFill transplant
+    (donor occupancy 0.75) can be in the prepared file, be visible to every
+    other stage, and be absent from the only measurement that matters here.
+
+    Four of the ``examples/iMARS`` enzymes relied on exactly that: their
+    cargo was not named in ``exclude_residue_names`` and did not block its
+    own channel anyway, because CAVER had never loaded it. The right answer
+    by accident is not the right answer, so the count is now read and
+    checked rather than assumed.
+    """
+
+    residues: int = 0
+    atoms: int = 0
+
+
+def read_log(path: str) -> Loaded:
+    """Read ``Residues:`` and ``Atoms:`` from a CAVER run's ``log.txt``.
+
+    *path* is the run directory or the log itself. The counts are per
+    snapshot and this pipeline runs one, so the first pair found is it.
+    """
+    if os.path.isdir(path):
+        path = os.path.join(path, "log.txt")
+    if not os.path.isfile(path):
+        raise FileNotFoundError("no CAVER log at %s" % path)
+    got = Loaded()
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            parts = line.split()
+            if len(parts) == 2 and parts[1].isdigit():
+                if parts[0] == "Residues:" and not got.residues:
+                    got.residues = int(parts[1])
+                elif parts[0] == "Atoms:" and not got.atoms:
+                    got.atoms = int(parts[1])
+            if got.residues and got.atoms:
+                break
+    if not got.atoms:
+        raise ValueError(
+            "no 'Atoms:' line in %s. CAVER writes one per snapshot; without "
+            "it there is no way to tell what it loaded, and a check that "
+            "cannot run must not report a pass." % path)
+    return got
 
 
 def read_summary(path: str) -> List[Cluster]:
